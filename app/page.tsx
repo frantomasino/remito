@@ -1,7 +1,7 @@
 "use client"
 
-import { useState, useRef, useCallback, useEffect } from "react"
-import { Printer, Eye, FileText, RotateCcw } from "lucide-react"
+import { useState, useRef, useCallback, useEffect, useMemo, startTransition } from "react"
+import { Printer, Eye, FileText, RotateCcw, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ClientForm } from "@/components/client-form"
@@ -27,6 +27,8 @@ const defaultClient: ClientData = {
   formaPago: "",
 }
 
+// ✅ Evita state extra para fecha (y re-renders). La fecha se “congela” por remito.
+// Si querés que cambie en vivo al pasar de día sin recargar, ahí sí conviene state.
 function getTodayDateSafe(): string {
   return new Date().toLocaleDateString("es-AR", {
     day: "2-digit",
@@ -42,100 +44,131 @@ export default function RemitoPage() {
   const [nextNumber, setNextNumber] = useState(1)
   const [showPreview, setShowPreview] = useState(false)
   const [salesHistory, setSalesHistory] = useState<SaleRecord[]>([])
+
+  // ✅ Congelar fecha del remito actual sin depender de “mounted”
+  const remitoDateRef = useRef<string>(getTodayDateSafe())
+
+  // ✅ Manejo de impresión robusto (sin timeouts)
+  const printIntentRef = useRef<null | "print" | "preview">(null)
+
+  // (Si realmente lo necesitás para evitar mismatch por alguna razón, dejalo.
+  // En general, acá no estás usando nada que rompa SSR/hidratación)
   const [mounted, setMounted] = useState(false)
-  const [todayDate, setTodayDate] = useState("")
-  const printRef = useRef<HTMLDivElement>(null)
+  useEffect(() => setMounted(true), [])
 
-  // 1) Mount + fecha
-  useEffect(() => {
-    setMounted(true)
-    setTodayDate(getTodayDateSafe())
-  }, [])
-
-  // 2) ✅ Cargar productos AUTOMÁTICAMENTE desde Google Sheets (CSV)
   useEffect(() => {
     const url = process.env.NEXT_PUBLIC_PRODUCTS_CSV_URL
     if (!url) return
+
+    const controller = new AbortController()
 
     const load = async () => {
       try {
         const res = await fetch(`/api/products-csv?url=${encodeURIComponent(url)}`, {
           cache: "no-store",
+          signal: controller.signal,
         })
-        if (!res.ok) throw new Error("No se pudo traer el CSV")
+        if (!res.ok) throw new Error("No se pudo traer el CSV/TSV")
 
         const text = await res.text()
         const loaded = parseCSV(text)
-        setProducts(loaded)
+
+        // ✅ startTransition: evita “tironeo” si el CSV es grande
+        startTransition(() => setProducts(loaded))
+
+        // ✅ logs solo en dev
+        if (process.env.NODE_ENV !== "production") {
+          // eslint-disable-next-line no-console
+          console.log("PRODUCTOS:", loaded.length)
+          // eslint-disable-next-line no-console
+          console.log("CÓDIGOS ÚNICOS:", new Set(loaded.map((p) => p.codigo)).size)
+        }
       } catch (e) {
+        if ((e as any)?.name === "AbortError") return
         console.error("No se pudieron cargar productos desde Google Sheets", e)
       }
     }
 
     load()
+    return () => controller.abort()
   }, [])
 
-  // ✅ DEBUG (temporal): ver si hay códigos duplicados
-  useEffect(() => {
-    console.log("PRODUCTOS:", products.length)
-    console.log("CÓDIGOS ÚNICOS:", new Set(products.map((p) => p.codigo)).size)
-  }, [products])
+  const remitoNumero = useMemo(() => formatRemitoNumber(nextNumber), [nextNumber])
 
-  const remitoNumero = formatRemitoNumber(nextNumber)
-  const total = items.reduce((s, i) => s + i.subtotal, 0)
+  const total = useMemo(() => items.reduce((s, i) => s + i.subtotal, 0), [items])
 
-  const remitoData: RemitoData = {
-    numero: remitoNumero,
-    fecha: todayDate,
-    client,
-    items,
-    subtotal: total,
-    total,
-  }
+  const remitoData: RemitoData = useMemo(
+    () => ({
+      numero: remitoNumero,
+      fecha: remitoDateRef.current,
+      client,
+      items,
+      subtotal: total,
+      total,
+    }),
+    [remitoNumero, client, items, total]
+  )
+
+  const canPrint = items.length > 0
 
   const recordSale = useCallback(() => {
+    // ✅ Evita depender de mil deps: usa lo que ya está memoizado
     const record: SaleRecord = {
       id: crypto.randomUUID(),
-      numero: remitoNumero,
-      fecha: todayDate,
-      cliente: client.nombre,
-      formaPago: client.formaPago || "Sin especificar",
-      total,
-      itemCount: items.length,
+      numero: remitoData.numero,
+      fecha: remitoData.fecha,
+      cliente: remitoData.client.nombre,
+      formaPago: remitoData.client.formaPago || "Sin especificar",
+      total: remitoData.total,
+      itemCount: remitoData.items.length,
     }
+
     setSalesHistory((prev) => [record, ...prev])
-  }, [remitoNumero, todayDate, client.nombre, client.formaPago, total, items.length])
+  }, [remitoData])
 
-  const handlePrint = useCallback(() => {
-    recordSale()
-    setTimeout(() => window.print(), 200)
-    setTimeout(() => {
-      setNextNumber((n) => n + 1)
-      setClient(defaultClient)
-      setItems([])
-      setTodayDate(getTodayDateSafe())
-    }, 500)
-  }, [recordSale])
-
-  const handlePreviewPrint = useCallback(() => {
-    setShowPreview(false)
-    recordSale()
-    setTimeout(() => window.print(), 200)
-    setTimeout(() => {
-      setNextNumber((n) => n + 1)
-      setClient(defaultClient)
-      setItems([])
-      setTodayDate(getTodayDateSafe())
-    }, 500)
-  }, [recordSale])
-
-  const handleNewRemito = () => {
+  const resetForNext = useCallback(() => {
+    setNextNumber((n) => n + 1)
     setClient(defaultClient)
     setItems([])
-  }
+    remitoDateRef.current = getTodayDateSafe()
+  }, [])
 
-  // ✅ NO obligatorio cliente
-  const canPrint = items.length > 0
+  useEffect(() => {
+    const onAfterPrint = () => {
+      // ✅ Solo resetea si realmente disparaste una impresión desde acá
+      if (!printIntentRef.current) return
+      printIntentRef.current = null
+      resetForNext()
+    }
+
+    window.addEventListener("afterprint", onAfterPrint)
+    return () => window.removeEventListener("afterprint", onAfterPrint)
+  }, [resetForNext])
+
+  const handlePrint = useCallback(() => {
+    if (!canPrint) return
+    recordSale()
+    printIntentRef.current = "print"
+    window.print()
+  }, [canPrint, recordSale])
+
+  const handlePreviewPrint = useCallback(() => {
+    if (!canPrint) return
+    setShowPreview(false)
+    recordSale()
+    printIntentRef.current = "preview"
+    window.print()
+  }, [canPrint, recordSale])
+
+  const handleNewRemito = useCallback(() => {
+    setClient(defaultClient)
+    setItems([])
+    // ❗ No tocamos número ni fecha: “Nuevo remito” acá era limpiar el actual.
+  }, [])
+
+  const handleClearItems = useCallback(() => {
+    setItems([])
+  }, [])
 
   if (!mounted) {
     return (
@@ -152,9 +185,7 @@ export default function RemitoPage() {
 
   return (
     <>
-      {/* Screen UI - hidden when printing */}
-      <div id="screen-ui" className="min-h-screen bg-background">
-        {/* Header */}
+      <div id="screen-ui" className="min-h-screen bg-background overflow-x-hidden">
         <header className="sticky top-0 z-40 border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
           <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3 lg:px-6">
             <div className="flex items-center gap-3">
@@ -186,10 +217,8 @@ export default function RemitoPage() {
           </div>
         </header>
 
-        {/* Main Content */}
-        <main className="mx-auto max-w-5xl px-4 py-6 lg:px-6 pb-24">
+        <main className="mx-auto max-w-5xl px-4 py-6 lg:px-6 pb-24 overflow-x-hidden">
           <div className="flex flex-col gap-6">
-            {/* Remito Number & Info Bar */}
             <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl bg-card border p-4">
               <div className="flex items-center gap-4">
                 <div>
@@ -201,7 +230,7 @@ export default function RemitoPage() {
                 <div className="h-8 w-px bg-border" />
                 <div>
                   <p className="text-xs text-muted-foreground uppercase tracking-wide">Fecha</p>
-                  <p className="text-sm font-semibold text-foreground">{todayDate}</p>
+                  <p className="text-sm font-semibold text-foreground">{remitoDateRef.current}</p>
                 </div>
               </div>
 
@@ -213,10 +242,8 @@ export default function RemitoPage() {
               )}
             </div>
 
-            {/* Sales History */}
             <SalesHistory records={salesHistory} onClear={() => setSalesHistory([])} />
 
-            {/* Step 2: Client Data */}
             <section className="rounded-xl bg-card border p-5">
               <div className="flex items-center gap-3 mb-4">
                 <span className="flex size-7 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
@@ -227,7 +254,6 @@ export default function RemitoPage() {
               <ClientForm data={client} onChange={setClient} />
             </section>
 
-            {/* Step 3: Select Products */}
             <section className="rounded-xl bg-card border p-5">
               <div className="flex items-center gap-3 mb-4">
                 <span className="flex size-7 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
@@ -238,7 +264,6 @@ export default function RemitoPage() {
               <ProductSelector products={products} items={items} onItemsChange={setItems} />
             </section>
 
-            {/* Print button bottom (desktop) */}
             {canPrint && (
               <div className="hidden sm:flex justify-end gap-3 pb-8">
                 <Button variant="outline" size="lg" onClick={() => setShowPreview(true)}>
@@ -254,29 +279,47 @@ export default function RemitoPage() {
           </div>
         </main>
 
-        {/* ✅ Barra inferior fija (solo móvil) */}
-        <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-card/95 backdrop-blur sm:hidden">
-          <div className="mx-auto max-w-5xl px-4 py-3 flex items-center justify-between gap-3">
-            <div className="flex flex-col leading-tight">
-              <span className="text-xs text-muted-foreground">Total</span>
-              <span className="text-lg font-bold text-primary">{formatCurrency(total)}</span>
+        {/* Footer móvil fijo */}
+        <div className="fixed inset-x-0 bottom-0 z-50 border-t bg-card/95 backdrop-blur sm:hidden">
+          <div className="px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+0.4rem)] flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-[10px] text-muted-foreground leading-none">Total</p>
+              <p className="text-[14px] font-bold text-primary tabular-nums truncate max-w-[42vw] leading-tight">
+                {formatCurrency(total)}
+              </p>
             </div>
 
-            <div className="flex gap-2">
-              <Button variant="outline" disabled={!canPrint} onClick={() => setShowPreview(true)}>
-                <Eye className="size-4" />
-                Ver
+            <div className="flex gap-1 flex-shrink-0">
+              <Button
+                variant="outline"
+                size="icon"
+                disabled={items.length === 0}
+                onClick={handleClearItems}
+                aria-label="Vaciar"
+                className="h-9 w-9"
+              >
+                <Trash2 className="size-4" />
               </Button>
-              <Button disabled={!canPrint} onClick={handlePrint}>
+
+              <Button
+                variant="outline"
+                size="icon"
+                disabled={!canPrint}
+                onClick={() => setShowPreview(true)}
+                aria-label="Ver"
+                className="h-9 w-9"
+              >
+                <Eye className="size-4" />
+              </Button>
+
+              <Button size="icon" disabled={!canPrint} onClick={handlePrint} aria-label="Imprimir" className="h-9 w-9">
                 <Printer className="size-4" />
-                Imprimir
               </Button>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Preview Dialog */}
       {showPreview && (
         <Dialog open={showPreview} onOpenChange={setShowPreview}>
           <DialogContent className="w-[100vw] h-[100vh] max-w-none sm:max-w-4xl sm:max-h-[90vh] overflow-y-auto p-0 sm:p-6">
@@ -303,9 +346,9 @@ export default function RemitoPage() {
         </Dialog>
       )}
 
-      {/* Printable remito - hidden on screen, shown only for print */}
+      {/* ✅ Importante: mantené este bloque para print */}
       <div id="printable-remito">
-        <RemitoPrint ref={printRef} data={remitoData} />
+        <RemitoPrint data={remitoData} />
       </div>
     </>
   )

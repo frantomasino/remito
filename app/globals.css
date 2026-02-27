@@ -184,5 +184,22 @@
   .remito-print th {
     border: 1px solid #000 !important;
     padding: 4px 8px;
-  }
+  
+}
+
+html, body {
+  overflow-x: hidden;
+  width: 100%;
+}
+
+#screen-ui {
+  overflow-x: hidden;
+  width: 100%;
+}
+
+/* evita el “arrastre” lateral en iOS */
+body {
+  overscroll-behavior-x: none;
+}
+
 }

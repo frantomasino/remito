@@ -1,17 +1,19 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import type React from "react"
+import { useCallback, useDeferredValue, useMemo, useState } from "react"
 import { Plus, Trash2, Search, Minus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { type Product, type LineItem, formatCurrency } from "@/lib/remito-types"
 
 interface ProductSelectorProps {
   products: Product[]
   items: LineItem[]
-  onItemsChange: (items: LineItem[]) => void
+  onItemsChange: React.Dispatch<React.SetStateAction<LineItem[]>>
 }
 
 const normalize = (s: string) =>
@@ -26,15 +28,14 @@ const extractParenParts = (s: string) => {
   return matches.map((m) => m.replace(/^\(/, "").replace(/\)$/, "").trim()).filter(Boolean)
 }
 
-const shortDesc = (s: string) => {
-  return s
-    .replace(/\([^)]*\)/g, "") // saca paréntesis
-    .replace(/#\S+/g, "") // saca #Promo
-    .replace(/\bTapas\s+para\s+/gi, "Tapas ") // Tapas para -> Tapas
+const shortDesc = (s: string) =>
+  s
+    .replace(/\([^)]*\)/g, "")
+    .replace(/#\S+/g, "")
+    .replace(/\bTapas\s+para\s+/gi, "Tapas ")
     .replace(/\s{2,}/g, " ")
     .replace(/\s+\./g, ".")
     .trim()
-}
 
 const detailTags = (s: string) => {
   const parts = extractParenParts(s)
@@ -59,7 +60,6 @@ const detailTags = (s: string) => {
   const seen = new Set<string>()
   const out: string[] = []
 
-  // ✅ chip Promo si viene con #Promo en el texto
   if (/#promo/i.test(s)) {
     out.push("Promo")
     seen.add("promo")
@@ -75,63 +75,117 @@ const detailTags = (s: string) => {
   return out.slice(0, 4)
 }
 
+type Derived = { title: string; tags: string[]; haystack: string }
+
 export function ProductSelector({ products, items, onItemsChange }: ProductSelectorProps) {
   const [search, setSearch] = useState("")
+  const deferredSearch = useDeferredValue(search)
+  const [addQty, setAddQty] = useState<Record<string, number>>({})
+
+  const qtyOptions = useMemo(() => Array.from({ length: 100 }, (_, i) => i + 1), [])
+
+  const getQty = useCallback((codigo: string) => addQty[codigo] ?? 1, [addQty])
+  const setQty = useCallback((codigo: string, qty: number) => {
+    setAddQty((prev) => (prev[codigo] === qty ? prev : { ...prev, [codigo]: qty }))
+  }, [])
+
+  const itemsByCode = useMemo(() => {
+    const m = new Map<string, LineItem>()
+    for (const it of items) m.set(it.product.codigo, it)
+    return m
+  }, [items])
+
+  const derivedByCode = useMemo(() => {
+    const m = new Map<string, Derived>()
+    for (const p of products) {
+      const title = shortDesc(p.descripcion)
+      const tags = detailTags(p.descripcion)
+      const haystack = normalize(`${p.codigo} ${p.descripcion}`)
+      m.set(p.codigo, { title, tags, haystack })
+    }
+    return m
+  }, [products])
 
   const filtered = useMemo(() => {
-    const q = normalize(search.trim())
+    const q = normalize(deferredSearch.trim())
     if (!q) return products
-    return products.filter((p) => normalize(`${p.codigo} ${p.descripcion}`).includes(q))
-  }, [products, search])
+    return products.filter((p) => (derivedByCode.get(p.codigo)?.haystack ?? "").includes(q))
+  }, [products, deferredSearch, derivedByCode])
 
-  const addItem = (product: Product) => {
-    const existing = items.find((i) => i.product.codigo === product.codigo)
-    if (existing) {
-      onItemsChange(
-        items.map((i) =>
-          i.product.codigo === product.codigo
-            ? { ...i, cantidad: i.cantidad + 1, subtotal: (i.cantidad + 1) * i.product.precio }
-            : i
-        )
-      )
-    } else {
-      onItemsChange([...items, { product, cantidad: 1, subtotal: product.precio }])
-    }
-  }
+  const addItemWithQty = useCallback(
+    (product: Product, qty: number) => {
+      const q = Math.min(100, Math.max(1, qty || 1))
 
-  const updateQuantity = (codigo: string, cantidad: number) => {
-    if (cantidad <= 0) {
-      onItemsChange(items.filter((i) => i.product.codigo !== codigo))
-    } else {
-      onItemsChange(
-        items.map((i) =>
-          i.product.codigo === codigo ? { ...i, cantidad, subtotal: cantidad * i.product.precio } : i
-        )
-      )
-    }
-  }
+      onItemsChange((prev) => {
+        const idx = prev.findIndex((i) => i.product.codigo === product.codigo)
 
-  const removeItem = (codigo: string) => onItemsChange(items.filter((i) => i.product.codigo !== codigo))
+        if (idx >= 0) {
+          const next = prev.slice()
+          const cur = next[idx]
+          const cantidad = cur.cantidad + q
+          next[idx] = { ...cur, cantidad, subtotal: cantidad * cur.product.precio }
+          return next
+        }
 
-  const dec = (codigo: string) => {
-    const it = items.find((x) => x.product.codigo === codigo)
-    if (!it) return
-    updateQuantity(codigo, it.cantidad - 1)
-  }
+        return [...prev, { product, cantidad: q, subtotal: q * product.precio }]
+      })
 
-  const inc = (codigo: string) => {
-    const it = items.find((x) => x.product.codigo === codigo)
-    if (!it) return
-    updateQuantity(codigo, it.cantidad + 1)
-  }
+      setQty(product.codigo, 1)
+    },
+    [onItemsChange, setQty]
+  )
 
-  const total = items.reduce((s, i) => s + i.subtotal, 0)
+  const updateQuantity = useCallback(
+    (codigo: string, cantidad: number) => {
+      onItemsChange((prev) => {
+        const idx = prev.findIndex((i) => i.product.codigo === codigo)
+        if (idx < 0) return prev
+
+        if (cantidad <= 0) return prev.filter((i) => i.product.codigo !== codigo)
+
+        const next = prev.slice()
+        const cur = next[idx]
+        if (cur.cantidad === cantidad) return prev
+
+        next[idx] = { ...cur, cantidad, subtotal: cantidad * cur.product.precio }
+        return next
+      })
+    },
+    [onItemsChange]
+  )
+
+  const removeItem = useCallback(
+    (codigo: string) => {
+      onItemsChange((prev) => prev.filter((i) => i.product.codigo !== codigo))
+    },
+    [onItemsChange]
+  )
+
+  const dec = useCallback(
+    (codigo: string) => {
+      const it = itemsByCode.get(codigo)
+      if (!it) return
+      updateQuantity(codigo, it.cantidad - 1)
+    },
+    [itemsByCode, updateQuantity]
+  )
+
+  const inc = useCallback(
+    (codigo: string) => {
+      const it = itemsByCode.get(codigo)
+      if (!it) return
+      updateQuantity(codigo, it.cantidad + 1)
+    },
+    [itemsByCode, updateQuantity]
+  )
+
+  const total = useMemo(() => items.reduce((s, i) => s + i.subtotal, 0), [items])
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-4 lg:flex-row lg:gap-6">
-        {/* Catalogo */}
-        <div className="flex flex-col gap-3 flex-1">
+    <div className="flex flex-col gap-4 overflow-x-hidden">
+      <div className="flex flex-col gap-4 lg:flex-row lg:gap-6 overflow-x-hidden">
+        {/* Catálogo */}
+        <div className="flex flex-col gap-3 flex-1 min-w-0">
           <Label>Catalogo de Productos</Label>
 
           <div className="relative">
@@ -150,49 +204,60 @@ export function ProductSelector({ products, items, onItemsChange }: ProductSelec
             </div>
           ) : (
             <>
-              {/* ✅ Mobile: cards + chips */}
-              <div className="sm:hidden flex flex-col gap-2">
+              {/* Móvil */}
+              <div className="sm:hidden flex flex-col gap-2 min-w-0">
                 {filtered.map((p, idx) => {
-                  const title = shortDesc(p.descripcion)
-                  const tags = detailTags(p.descripcion)
-                  return (
-                    <div key={`${p.codigo || "NO_CODE"}-${idx}`} className="rounded-lg border p-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold break-words">{title}</p>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            <span className="font-mono">{p.codigo}</span> ·{" "}
-                            <span className="font-medium text-foreground">{formatCurrency(p.precio)}</span>
-                          </p>
+                  const d = derivedByCode.get(p.codigo)
+                  const title = d?.title ?? shortDesc(p.descripcion)
+                  const tags = d?.tags ?? detailTags(p.descripcion)
+                  const qty = getQty(p.codigo)
 
-                          {tags.length > 0 && (
-                            <div className="mt-2 flex flex-wrap gap-1.5">
-                              {tags.map((t) => (
-                                <span key={t} className="rounded-full border px-2 py-0.5 text-[11px] bg-muted/40">
-                                  {t}
-                                </span>
+                  return (
+                    <div key={`${p.codigo || "NO_CODE"}-${idx}`} className="rounded-lg border p-3 overflow-x-hidden">
+                      <p className="text-[12px] font-semibold leading-snug break-words">{title}</p>
+
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        <span className="font-medium text-foreground">{formatCurrency(p.precio)}</span>
+                      </p>
+
+                      {tags.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {tags.map((t) => (
+                            <span key={t} className="rounded-full border px-2 py-0.5 text-[10px] bg-muted/40">
+                              {t}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="mt-3 flex items-center gap-2 min-w-0">
+                        <div className="w-20 flex-shrink-0">
+                          <Select value={String(qty)} onValueChange={(v) => setQty(p.codigo, Number(v))}>
+                            <SelectTrigger className="h-8 w-full px-2 text-[12px]">
+                              <SelectValue placeholder="Cant." />
+                            </SelectTrigger>
+
+                            <SelectContent className="max-h-72 w-[var(--radix-select-trigger-width)]">
+                              {qtyOptions.map((n) => (
+                                <SelectItem key={n} value={String(n)} className="text-[12px]">
+                                  {n}
+                                </SelectItem>
                               ))}
-                            </div>
-                          )}
+                            </SelectContent>
+                          </Select>
                         </div>
 
-                        <Button size="sm" onClick={() => addItem(p)} aria-label={`Agregar ${title}`}>
+                        <Button className="h-8 flex-1 px-3 text-[12px]" onClick={() => addItemWithQty(p, qty)}>
                           <Plus className="size-4" />
-                          +1
+                          Agregar
                         </Button>
                       </div>
                     </div>
                   )
                 })}
-
-                {filtered.length === 0 && (
-                  <div className="text-center text-xs text-muted-foreground py-6 border rounded-lg">
-                    No se encontraron productos
-                  </div>
-                )}
               </div>
 
-              {/* Desktop: tabla + chips */}
+              {/* Desktop */}
               <div className="hidden sm:block max-h-64 overflow-y-auto rounded-lg border">
                 <Table>
                   <TableHeader>
@@ -205,13 +270,13 @@ export function ProductSelector({ products, items, onItemsChange }: ProductSelec
                   </TableHeader>
                   <TableBody>
                     {filtered.map((p, idx) => {
-                      const title = shortDesc(p.descripcion)
-                      const tags = detailTags(p.descripcion)
+                      const d = derivedByCode.get(p.codigo)
+                      const title = d?.title ?? shortDesc(p.descripcion)
+                      const tags = d?.tags ?? detailTags(p.descripcion)
 
                       return (
                         <TableRow key={`${p.codigo || "NO_CODE"}-${idx}`}>
                           <TableCell className="text-xs font-mono text-muted-foreground">{p.codigo}</TableCell>
-
                           <TableCell className="text-xs">
                             <div className="flex flex-col gap-1">
                               <span className="font-medium">{title}</span>
@@ -226,14 +291,12 @@ export function ProductSelector({ products, items, onItemsChange }: ProductSelec
                               )}
                             </div>
                           </TableCell>
-
                           <TableCell className="text-xs text-right font-medium">{formatCurrency(p.precio)}</TableCell>
-
                           <TableCell>
                             <Button
                               variant="ghost"
                               size="icon-sm"
-                              onClick={() => addItem(p)}
+                              onClick={() => addItemWithQty(p, 1)}
                               aria-label={`Agregar ${title}`}
                             >
                               <Plus className="size-4 text-primary" />
@@ -242,14 +305,6 @@ export function ProductSelector({ products, items, onItemsChange }: ProductSelec
                         </TableRow>
                       )
                     })}
-
-                    {filtered.length === 0 && (
-                      <TableRow>
-                        <TableCell colSpan={4} className="text-center text-xs text-muted-foreground py-6">
-                          No se encontraron productos
-                        </TableCell>
-                      </TableRow>
-                    )}
                   </TableBody>
                 </Table>
               </div>
@@ -258,7 +313,7 @@ export function ProductSelector({ products, items, onItemsChange }: ProductSelec
         </div>
 
         {/* Seleccionados */}
-        <div className="flex flex-col gap-3 flex-1">
+        <div className="flex flex-col gap-3 flex-1 min-w-0">
           <Label>Productos Seleccionados ({items.length})</Label>
 
           {items.length === 0 ? (
@@ -267,25 +322,24 @@ export function ProductSelector({ products, items, onItemsChange }: ProductSelec
             </div>
           ) : (
             <>
-              {/* ✅ Mobile: cards + stepper + chips */}
-              <div className="sm:hidden flex flex-col gap-2">
+              {/* Móvil */}
+              <div className="sm:hidden flex flex-col gap-2 min-w-0">
                 {items.map((item) => {
-                  const title = shortDesc(item.product.descripcion)
-                  const tags = detailTags(item.product.descripcion)
+                  const d = derivedByCode.get(item.product.codigo)
+                  const title = d?.title ?? shortDesc(item.product.descripcion)
+                  const tags = d?.tags ?? detailTags(item.product.descripcion)
 
                   return (
-                    <div key={item.product.codigo} className="rounded-lg border p-3">
-                      <div className="flex items-start justify-between gap-3">
+                    <div key={item.product.codigo} className="rounded-lg border p-3 overflow-x-hidden">
+                      <div className="flex items-start justify-between gap-3 min-w-0">
                         <div className="min-w-0">
-                          <p className="text-sm font-semibold break-words">{title}</p>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            <span className="font-mono">{item.product.codigo}</span> · {formatCurrency(item.product.precio)}
-                          </p>
+                          <p className="text-[12px] font-semibold leading-snug break-words">{title}</p>
+                          <p className="mt-1 text-[11px] text-muted-foreground">{formatCurrency(item.product.precio)}</p>
 
                           {tags.length > 0 && (
                             <div className="mt-2 flex flex-wrap gap-1.5">
                               {tags.map((t) => (
-                                <span key={t} className="rounded-full border px-2 py-0.5 text-[11px] bg-muted/40">
+                                <span key={t} className="rounded-full border px-2 py-0.5 text-[10px] bg-muted/40">
                                   {t}
                                 </span>
                               ))}
@@ -293,51 +347,46 @@ export function ProductSelector({ products, items, onItemsChange }: ProductSelec
                           )}
                         </div>
 
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={() => removeItem(item.product.codigo)}
-                          aria-label={`Quitar ${title}`}
-                        >
+                        <Button variant="ghost" size="icon-sm" onClick={() => removeItem(item.product.codigo)} aria-label="Quitar">
                           <Trash2 className="size-4 text-destructive" />
                         </Button>
                       </div>
 
-                      <div className="mt-3 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
+                      <div className="mt-3 flex items-center justify-between gap-2 min-w-0">
+                        <div className="flex items-center gap-2 flex-shrink-0">
                           <Button variant="outline" size="sm" onClick={() => dec(item.product.codigo)} aria-label="Restar">
                             <Minus className="size-4" />
                           </Button>
-                          <span className="w-10 text-center font-semibold">{item.cantidad}</span>
+                          <span className="w-10 text-center font-semibold text-[12px]">{item.cantidad}</span>
                           <Button variant="outline" size="sm" onClick={() => inc(item.product.codigo)} aria-label="Sumar">
                             <Plus className="size-4" />
                           </Button>
                         </div>
 
-                        <div className="text-right">
-                          <p className="text-xs text-muted-foreground">Subtotal</p>
-                          <p className="text-sm font-bold">{formatCurrency(item.subtotal)}</p>
+                        <div className="text-right min-w-0">
+                          <p className="text-[11px] text-muted-foreground">Subtotal</p>
+                          <p className="text-[12px] font-bold truncate max-w-[38vw]">{formatCurrency(item.subtotal)}</p>
                         </div>
                       </div>
                     </div>
                   )
                 })}
 
-                <div className="flex justify-end rounded-lg bg-muted/50 px-4 py-3">
-                  <div className="flex flex-col items-end gap-1">
-                    <div className="flex items-center gap-4 text-sm">
+                <div className="flex justify-end rounded-lg bg-muted/50 px-4 py-3 overflow-x-hidden">
+                  <div className="flex flex-col items-end gap-1 min-w-0">
+                    <div className="flex items-center gap-4 text-[11px] min-w-0">
                       <span className="text-muted-foreground">Subtotal:</span>
-                      <span className="font-medium">{formatCurrency(total)}</span>
+                      <span className="font-medium truncate max-w-[45vw]">{formatCurrency(total)}</span>
                     </div>
-                    <div className="flex items-center gap-4 text-base font-bold">
+                    <div className="flex items-center gap-4 text-[13px] font-bold min-w-0">
                       <span>Total:</span>
-                      <span className="text-primary">{formatCurrency(total)}</span>
+                      <span className="text-primary truncate max-w-[45vw]">{formatCurrency(total)}</span>
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* Desktop: tabla (igual que antes, pero mostrando desc corta) */}
+              {/* Desktop */}
               <div className="hidden sm:block max-h-64 overflow-y-auto rounded-lg border">
                 <Table>
                   <TableHeader>
@@ -353,31 +402,8 @@ export function ProductSelector({ products, items, onItemsChange }: ProductSelec
                     {items.map((item) => (
                       <TableRow key={item.product.codigo}>
                         <TableCell className="text-xs">
-  {(() => {
-    const title = shortDesc(item.product.descripcion)
-    const tags = detailTags(item.product.descripcion)
-
-    return (
-      <div className="flex flex-col gap-1">
-        <span>
-          <span className="font-mono text-muted-foreground">{item.product.codigo}</span>
-          {" - "}
-          <span className="font-medium">{title}</span>
-        </span>
-
-        {tags.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {tags.map((t) => (
-              <span key={t} className="rounded-full border px-2 py-0.5 text-[11px] bg-muted/40">
-                {t}
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-    )
-  })()}
-</TableCell>
+                          {derivedByCode.get(item.product.codigo)?.title ?? shortDesc(item.product.descripcion)}
+                        </TableCell>
                         <TableCell>
                           <Input
                             type="number"
@@ -385,6 +411,7 @@ export function ProductSelector({ products, items, onItemsChange }: ProductSelec
                             value={item.cantidad}
                             onChange={(e) => updateQuantity(item.product.codigo, parseInt(e.target.value) || 0)}
                             className="h-7 w-16 text-center text-xs mx-auto"
+                            inputMode="numeric"
                           />
                         </TableCell>
                         <TableCell className="text-xs text-right">{formatCurrency(item.product.precio)}</TableCell>
@@ -398,19 +425,6 @@ export function ProductSelector({ products, items, onItemsChange }: ProductSelec
                     ))}
                   </TableBody>
                 </Table>
-              </div>
-
-              <div className="hidden sm:flex justify-end rounded-lg bg-muted/50 px-4 py-3">
-                <div className="flex flex-col items-end gap-1">
-                  <div className="flex items-center gap-4 text-sm">
-                    <span className="text-muted-foreground">Subtotal:</span>
-                    <span className="font-medium">{formatCurrency(total)}</span>
-                  </div>
-                  <div className="flex items-center gap-4 text-base font-bold">
-                    <span>Total:</span>
-                    <span className="text-primary">{formatCurrency(total)}</span>
-                  </div>
-                </div>
               </div>
             </>
           )}
