@@ -38,44 +38,126 @@ export interface SaleRecord {
 }
 
 export function parseCSV(text: string): Product[] {
-  const lines = text.trim().split("\n")
+  const lines = text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0)
+
   if (lines.length < 2) return []
 
-  const header = lines[0].toLowerCase()
-  const separator = header.includes("\t") ? "\t" : header.includes(";") ? ";" : ","
+  const normalizeHeader = (s: string) =>
+    s
+      .trim()
+      .toLowerCase()
+      .replace(/"/g, "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
 
-  const headers = lines[0].split(separator).map((h) => h.trim().toLowerCase().replace(/"/g, ""))
-
-  const codigoIdx = headers.findIndex((h) =>
-    h.includes("codigo") || h.includes("código") || h.includes("cod") || h.includes("id") || h.includes("sku")
-  )
-  const descripcionIdx = headers.findIndex((h) =>
-    h.includes("descripcion") || h.includes("descripción") || h.includes("nombre") || h.includes("producto") || h.includes("detalle")
-  )
-  const precioIdx = headers.findIndex((h) =>
-    h.includes("precio") || h.includes("price") || h.includes("valor") || h.includes("importe") || h.includes("costo")
-  )
-
-  if (descripcionIdx === -1 || precioIdx === -1) {
-    return []
+  const detectDelimiter = (sample: string) => {
+    const counts = {
+      "\t": (sample.match(/\t/g) || []).length,
+      ";": (sample.match(/;/g) || []).length,
+      ",": (sample.match(/,/g) || []).length,
+    }
+    return (Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] as "\t" | ";" | ",") || ";"
   }
 
+  const parsePrice = (raw: string): number => {
+    if (!raw) return NaN
+    let s = String(raw).trim()
+
+    s = s.replace(/\$/g, "").replace(/\s+/g, "")
+
+    if (s.includes(".") && s.includes(",")) {
+      s = s.replace(/\./g, "").replace(",", ".")
+      const n = Number(s)
+      return Number.isFinite(n) ? n : NaN
+    }
+
+    if (s.includes(".") && !s.includes(",")) {
+      const parts = s.split(".")
+      const last = parts[parts.length - 1]
+      if (/^\d{3}$/.test(last)) {
+        s = s.replace(/\./g, "")
+        const n = Number(s)
+        return Number.isFinite(n) ? n : NaN
+      }
+      const n = Number(s)
+      return Number.isFinite(n) ? n : NaN
+    }
+
+    if (s.includes(",") && !s.includes(".")) {
+      s = s.replace(",", ".")
+      const n = Number(s)
+      return Number.isFinite(n) ? n : NaN
+    }
+
+    const n = Number(s)
+    return Number.isFinite(n) ? n : NaN
+  }
+
+  const headerLine = lines[0]
+  const separator = detectDelimiter(headerLine)
+
+  const headers = headerLine.split(separator).map(normalizeHeader)
+
+  const codigoIdx = headers.findIndex(
+    (h) => h.includes("codigo") || h.includes("cod") || h.includes("id") || h.includes("sku")
+  )
+  const descripcionIdx = headers.findIndex(
+    (h) => h.includes("descripcion") || h.includes("nombre") || h.includes("producto") || h.includes("detalle")
+  )
+  const precioIdx = headers.findIndex(
+    (h) => h.includes("precio") || h.includes("price") || h.includes("valor") || h.includes("importe") || h.includes("costo")
+  )
+
+  const headerOk = descripcionIdx !== -1 && precioIdx !== -1
+
   const products: Product[] = []
+  const seen = new Set<string>()
 
   for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim()
+    const line = lines[i]
     if (!line) continue
 
     const cols = line.split(separator).map((c) => c.trim().replace(/"/g, ""))
 
-    const codigo = codigoIdx >= 0 ? cols[codigoIdx] || "" : String(i)
-    const descripcion = cols[descripcionIdx] || ""
-    const precioRaw = cols[precioIdx] || "0"
-    const precio = parseFloat(precioRaw.replace(/[$.]/g, "").replace(",", ".")) || 0
+    let codigo = ""
+    let descripcion = ""
+    let precioRaw = ""
 
-    if (descripcion && precio > 0) {
-      products.push({ codigo, descripcion, precio })
+    if (headerOk) {
+      codigo = codigoIdx >= 0 ? cols[codigoIdx] || "" : ""
+      descripcion = cols[descripcionIdx] || ""
+      precioRaw = cols[precioIdx] || ""
+    } else {
+      if (cols.length >= 3) {
+        codigo = cols[0] || ""
+        descripcion = cols[1] || ""
+        precioRaw = cols[2] || ""
+      } else if (cols.length === 2) {
+        descripcion = cols[0] || ""
+        precioRaw = cols[1] || ""
+      } else {
+        continue
+      }
     }
+
+    if (!descripcion) continue
+
+    const precio = parsePrice(precioRaw)
+    if (!Number.isFinite(precio) || precio <= 0) continue
+
+    if (!codigo) codigo = `AUTO${String(products.length + 1).padStart(3, "0")}`
+
+    // elimina duplicados exactos (vos tenés una fila repetida)
+    const key = `${codigo}||${descripcion}||${precio}`
+    if (seen.has(key)) continue
+    seen.add(key)
+
+    products.push({ codigo, descripcion, precio })
   }
 
   return products

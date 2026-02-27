@@ -75,6 +75,12 @@ export default function RemitoPage() {
     load()
   }, [])
 
+  // ✅ DEBUG (temporal): ver si hay códigos duplicados
+  useEffect(() => {
+    console.log("PRODUCTOS:", products.length)
+    console.log("CÓDIGOS ÚNICOS:", new Set(products.map((p) => p.codigo)).size)
+  }, [products])
+
   const remitoNumero = formatRemitoNumber(nextNumber)
   const total = items.reduce((s, i) => s + i.subtotal, 0)
 
@@ -277,12 +283,14 @@ export default function RemitoPage() {
             <DialogHeader>
               <DialogTitle>Vista Previa del Remito</DialogTitle>
             </DialogHeader>
+
             <div className="p-4 sm:p-0">
-  <div className="border rounded-lg overflow-hidden bg-white">
-    <RemitoPrint data={remitoData} />
-  </div>
-</div>
-            <div className="flex justify-end gap-2">
+              <div className="border rounded-lg overflow-hidden bg-white">
+                <RemitoPrint data={remitoData} />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 px-4 pb-4 sm:px-0 sm:pb-0">
               <Button variant="outline" onClick={() => setShowPreview(false)}>
                 Cerrar
               </Button>
