@@ -9,6 +9,9 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+
+  // ✅ necesario para evitar el error Turbopack + config webpack (next-pwa)
+  turbopack: {},
 }
 
 const withPWA = nextPWA({
