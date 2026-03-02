@@ -59,6 +59,9 @@ export default function RemitoPage() {
   const [showPreview, setShowPreview] = useState(false)
   const [salesHistory, setSalesHistory] = useState<SaleRecord[]>([])
 
+  // ✅ iOS fix: mostrar printable antes de window.print()
+  const [isPrinting, setIsPrinting] = useState(false)
+
   // Lista seleccionada
   const [priceListId, setPriceListId] = useState<PriceListId>("minorista")
 
@@ -222,6 +225,7 @@ export default function RemitoPage() {
     const onAfterPrint = () => {
       if (!printIntentRef.current) return
       printIntentRef.current = null
+      setIsPrinting(false) // ✅ volver a ocultar printable
       resetForNext()
     }
 
@@ -233,7 +237,14 @@ export default function RemitoPage() {
     if (!canPrint) return
     recordSale()
     printIntentRef.current = "print"
-    window.print()
+
+    // ✅ iOS: mostrar printable antes
+    setIsPrinting(true)
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.print()
+      })
+    })
   }, [canPrint, recordSale])
 
   const handlePreviewPrint = useCallback(() => {
@@ -241,7 +252,14 @@ export default function RemitoPage() {
     setShowPreview(false)
     recordSale()
     printIntentRef.current = "preview"
-    window.print()
+
+    // ✅ iOS: mostrar printable antes
+    setIsPrinting(true)
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.print()
+      })
+    })
   }, [canPrint, recordSale])
 
   const handleNewRemito = useCallback(() => {
@@ -438,7 +456,14 @@ export default function RemitoPage() {
                 <Trash2 className="size-4" />
               </Button>
 
-              <Button variant="outline" size="icon" disabled={!canPrint} onClick={() => setShowPreview(true)} aria-label="Ver" className="h-9 w-9">
+              <Button
+                variant="outline"
+                size="icon"
+                disabled={!canPrint}
+                onClick={() => setShowPreview(true)}
+                aria-label="Ver"
+                className="h-9 w-9"
+              >
                 <Eye className="size-4" />
               </Button>
 
@@ -476,7 +501,8 @@ export default function RemitoPage() {
         </Dialog>
       )}
 
-      <div id="printable-remito">
+      {/* ✅ iOS: si no está "visible" antes, imprime en blanco */}
+      <div id="printable-remito" style={{ display: isPrinting ? "block" : "none" }}>
         <RemitoPrint data={remitoData} />
       </div>
     </>
