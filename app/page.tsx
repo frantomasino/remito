@@ -35,7 +35,6 @@ const defaultClient: ClientData = {
   formaPago: "",
 }
 
-// Fecha del día en formato DD/MM/YYYY (Argentina)
 function getTodayDateSafe(): string {
   return new Date().toLocaleDateString("es-AR", {
     day: "2-digit",
@@ -51,6 +50,8 @@ const LS_KEYS = {
   lastDay: "lastDay",
 }
 
+const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent)
+
 export default function RemitoPage() {
   const [products, setProducts] = useState<Product[]>([])
   const [items, setItems] = useState<LineItem[]>([])
@@ -59,50 +60,37 @@ export default function RemitoPage() {
   const [showPreview, setShowPreview] = useState(false)
   const [salesHistory, setSalesHistory] = useState<SaleRecord[]>([])
 
-  // ✅ iOS fix: mostrar printable antes de window.print()
-  const [isPrinting, setIsPrinting] = useState(false)
-
-  // Lista seleccionada
   const [priceListId, setPriceListId] = useState<PriceListId>("minorista")
-
-  // Congelar fecha del remito actual
   const remitoDateRef = useRef<string>(getTodayDateSafe())
-
-  // Manejo de impresión robusto
   const printIntentRef = useRef<null | "print" | "preview">(null)
 
   const [mounted, setMounted] = useState(false)
   useEffect(() => setMounted(true), [])
 
-  // ✅ Restaurar estado al cargar + reset diario de ventas (arranca en cero cada día)
+  // ✅ restore + reset diario
   useEffect(() => {
     try {
       const today = getTodayDateSafe()
       const lastDay = localStorage.getItem(LS_KEYS.lastDay)
 
-      // Nuevo día: arrancar de cero ventas del día
       if (lastDay && lastDay !== today) {
         localStorage.removeItem(LS_KEYS.salesHistory)
         setSalesHistory([])
       }
 
-      // Guardar día actual
       localStorage.setItem(LS_KEYS.lastDay, today)
 
-      // Restaurar lista elegida
       const savedList = localStorage.getItem(LS_KEYS.priceListId) as PriceListId | null
       if (savedList === "minorista" || savedList === "mayorista" || savedList === "oferta") {
         setPriceListId(savedList)
       }
 
-      // Restaurar nextNumber
       const savedNext = localStorage.getItem(LS_KEYS.nextNumber)
       if (savedNext) {
         const n = Number(savedNext)
         if (Number.isFinite(n) && n > 0) setNextNumber(n)
       }
 
-      // Restaurar historial (si no se limpió)
       const savedHistory = localStorage.getItem(LS_KEYS.salesHistory)
       if (savedHistory) {
         const parsed = JSON.parse(savedHistory) as SaleRecord[]
@@ -113,41 +101,31 @@ export default function RemitoPage() {
     }
   }, [])
 
-  // Persistir priceListId
   useEffect(() => {
     try {
       localStorage.setItem(LS_KEYS.priceListId, priceListId)
-    } catch {
-      // nada
-    }
+    } catch {}
   }, [priceListId])
 
-  // Persistir nextNumber
   useEffect(() => {
     try {
       localStorage.setItem(LS_KEYS.nextNumber, String(nextNumber))
-    } catch {
-      // nada
-    }
+    } catch {}
   }, [nextNumber])
 
-  // Persistir salesHistory
   useEffect(() => {
     try {
       localStorage.setItem(LS_KEYS.salesHistory, JSON.stringify(salesHistory))
-    } catch {
-      // nada
-    }
+    } catch {}
   }, [salesHistory])
 
-  // Cargar productos según lista elegida
+  // ✅ load products
   useEffect(() => {
     const selected = PRICE_LISTS.find((x) => x.id === priceListId)
     const url = selected?.url
 
     if (!url) {
       if (process.env.NODE_ENV !== "production") {
-        // eslint-disable-next-line no-console
         console.warn(`Falta la env para la lista "${priceListId}". Revisá NEXT_PUBLIC_LISTA_*_URL`)
       }
       return
@@ -165,13 +143,7 @@ export default function RemitoPage() {
 
         const text = await res.text()
         const loaded = parseCSV(text)
-
         startTransition(() => setProducts(loaded))
-
-        if (process.env.NODE_ENV !== "production") {
-          // eslint-disable-next-line no-console
-          console.log(`[${priceListId}] PRODUCTOS:`, loaded.length)
-        }
       } catch (e) {
         if ((e as any)?.name === "AbortError") return
         console.error("No se pudieron cargar productos desde Google Sheets", e)
@@ -183,7 +155,6 @@ export default function RemitoPage() {
   }, [priceListId])
 
   const remitoNumero = useMemo(() => formatRemitoNumber(nextNumber), [nextNumber])
-
   const total = useMemo(() => items.reduce((s, i) => s + i.subtotal, 0), [items])
 
   const remitoData: RemitoData = useMemo(
@@ -210,7 +181,6 @@ export default function RemitoPage() {
       total: remitoData.total,
       itemCount: remitoData.items.length,
     }
-
     setSalesHistory((prev) => [record, ...prev])
   }, [remitoData])
 
@@ -225,27 +195,82 @@ export default function RemitoPage() {
     const onAfterPrint = () => {
       if (!printIntentRef.current) return
       printIntentRef.current = null
-      setIsPrinting(false) // ✅ volver a ocultar printable
       resetForNext()
     }
-
     window.addEventListener("afterprint", onAfterPrint)
     return () => window.removeEventListener("afterprint", onAfterPrint)
   }, [resetForNext])
+
+  // ✅ iOS fix: abrir ventana con botón "Imprimir" (gesto real)
+  const openIOSPrintWindow = useCallback(() => {
+    const printable = document.getElementById("printable-remito")
+    if (!printable) return
+
+    const styles = Array.from(document.querySelectorAll('link[rel="stylesheet"], style'))
+      .map((el) => el.outerHTML)
+      .join("\n")
+
+    const win = window.open("", "_blank")
+    if (!win) return
+
+    const html = `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Imprimir Remito</title>
+${styles}
+<style>
+  body { margin: 0; background: #f5f5f5; }
+  .topbar{
+    position: sticky; top:0; z-index:10;
+    display:flex; gap:10px; justify-content:flex-end; align-items:center;
+    padding:12px; background:#fff; border-bottom:1px solid #ddd;
+  }
+  .btn{
+    font-size:16px; padding:10px 14px; border-radius:10px;
+    border:1px solid #ccc; background:#fff;
+  }
+  .btn-primary{ background:#0f172a; color:#fff; border-color:#0f172a; }
+  .sheet{ padding:12px; }
+  /* fuerza visible */
+  #printable-remito{ display:block !important; background:#fff !important; }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <button class="btn" id="btnClose">Cerrar</button>
+    <button class="btn btn-primary" id="btnPrint">Imprimir</button>
+  </div>
+  <div class="sheet">
+    ${printable.outerHTML}
+  </div>
+  <script>
+    document.getElementById("btnPrint").addEventListener("click", () => window.print());
+    document.getElementById("btnClose").addEventListener("click", () => window.close());
+  </script>
+</body>
+</html>`
+
+    win.document.open()
+    win.document.write(html)
+    win.document.close()
+    win.focus()
+  }, [])
 
   const handlePrint = useCallback(() => {
     if (!canPrint) return
     recordSale()
     printIntentRef.current = "print"
 
-    // ✅ iOS: mostrar printable antes
-    setIsPrinting(true)
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        window.print()
-      })
-    })
-  }, [canPrint, recordSale])
+    if (isIOS()) {
+      openIOSPrintWindow()
+      // en iOS puede no disparar afterprint, no reseteamos automáticamente
+      return
+    }
+
+    window.print()
+  }, [canPrint, recordSale, openIOSPrintWindow])
 
   const handlePreviewPrint = useCallback(() => {
     if (!canPrint) return
@@ -253,14 +278,13 @@ export default function RemitoPage() {
     recordSale()
     printIntentRef.current = "preview"
 
-    // ✅ iOS: mostrar printable antes
-    setIsPrinting(true)
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        window.print()
-      })
-    })
-  }, [canPrint, recordSale])
+    if (isIOS()) {
+      openIOSPrintWindow()
+      return
+    }
+
+    window.print()
+  }, [canPrint, recordSale, openIOSPrintWindow])
 
   const handleNewRemito = useCallback(() => {
     setClient(defaultClient)
@@ -271,7 +295,6 @@ export default function RemitoPage() {
     setItems([])
   }, [])
 
-  // Descargar CSV del día
   const downloadTodaySalesCSV = useCallback(() => {
     const today = getTodayDateSafe()
     const todays = salesHistory.filter((r) => r.fecha === today)
@@ -501,8 +524,8 @@ export default function RemitoPage() {
         </Dialog>
       )}
 
-      {/* ✅ iOS: si no está "visible" antes, imprime en blanco */}
-      <div id="printable-remito" style={{ display: isPrinting ? "block" : "none" }}>
+      {/* Printable: queda oculto en pantalla por CSS, se muestra en @media print */}
+      <div id="printable-remito">
         <RemitoPrint data={remitoData} />
       </div>
     </>
