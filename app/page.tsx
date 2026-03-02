@@ -233,7 +233,6 @@ ${styles}
   }
   .btn-primary{ background:#0f172a; color:#fff; border-color:#0f172a; }
   .sheet{ padding:12px; }
-  /* fuerza visible */
   #printable-remito{ display:block !important; background:#fff !important; }
 </style>
 </head>
@@ -265,7 +264,6 @@ ${styles}
 
     if (isIOS()) {
       openIOSPrintWindow()
-      // en iOS puede no disparar afterprint, no reseteamos automáticamente
       return
     }
 
@@ -498,27 +496,44 @@ ${styles}
         </div>
       </div>
 
+      {/* ✅ Modal preview FIX: fijo, centrado y sin "bailar" en mobile */}
       {showPreview && (
         <Dialog open={showPreview} onOpenChange={setShowPreview}>
-          <DialogContent className="w-[100vw] h-[100vh] max-w-none sm:max-w-4xl sm:max-h-[90vh] overflow-y-auto p-0 sm:p-6">
-            <DialogHeader>
+          <DialogContent
+            className="
+              fixed left-1/2 top-1/2 z-50
+              flex flex-col
+              w-[calc(100vw-16px)] sm:w-full
+              max-w-none sm:max-w-4xl
+              h-[calc(100vh-16px)] sm:h-auto
+              max-h-[calc(100vh-16px)] sm:max-h-[90vh]
+              -translate-x-1/2 -translate-y-1/2
+              p-0
+              overflow-hidden
+            "
+          >
+            <DialogHeader className="px-4 pt-4 sm:px-6 sm:pt-6">
               <DialogTitle>Vista Previa del Remito</DialogTitle>
             </DialogHeader>
 
-            <div className="p-4 sm:p-0">
+            {/* ✅ Solo el contenido scrollea */}
+            <div className="flex-1 overflow-y-auto px-4 pb-4 sm:px-6 sm:pb-6">
               <div className="border rounded-lg overflow-hidden bg-white">
                 <RemitoPrint data={remitoData} />
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 px-4 pb-4 sm:px-0 sm:pb-0">
-              <Button variant="outline" onClick={() => setShowPreview(false)}>
-                Cerrar
-              </Button>
-              <Button onClick={handlePreviewPrint}>
-                <Printer className="size-4" />
-                Imprimir
-              </Button>
+            {/* ✅ Footer fijo */}
+            <div className="sticky bottom-0 border-t bg-card/95 backdrop-blur px-4 py-3 sm:px-6">
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setShowPreview(false)}>
+                  Cerrar
+                </Button>
+                <Button onClick={handlePreviewPrint}>
+                  <Printer className="size-4" />
+                  Imprimir
+                </Button>
+              </div>
             </div>
           </DialogContent>
         </Dialog>
