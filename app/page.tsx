@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useRef, useCallback, useEffect, useMemo, startTransition } from "react"
-import { Printer, Eye, FileText, RotateCcw, Trash2 } from "lucide-react"
+import { Printer, Eye, FileText, RotateCcw, Trash2, Download } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ClientForm } from "@/components/client-form"
@@ -19,6 +19,14 @@ import {
   parseCSV,
 } from "@/lib/remito-types"
 
+type PriceListId = "minorista" | "mayorista" | "oferta"
+
+const PRICE_LISTS: { id: PriceListId; label: string; url?: string }[] = [
+  { id: "minorista", label: "Minorista", url: process.env.NEXT_PUBLIC_LISTA_MINORISTA_URL },
+  { id: "mayorista", label: "Mayorista", url: process.env.NEXT_PUBLIC_LISTA_MAYORISTA_URL },
+  { id: "oferta", label: "Oferta", url: process.env.NEXT_PUBLIC_LISTA_OFERTA_URL },
+]
+
 const defaultClient: ClientData = {
   nombre: "",
   direccion: "",
@@ -27,14 +35,20 @@ const defaultClient: ClientData = {
   formaPago: "",
 }
 
-// ✅ Evita state extra para fecha (y re-renders). La fecha se “congela” por remito.
-// Si querés que cambie en vivo al pasar de día sin recargar, ahí sí conviene state.
+// Fecha del día en formato DD/MM/YYYY (Argentina)
 function getTodayDateSafe(): string {
   return new Date().toLocaleDateString("es-AR", {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
   })
+}
+
+const LS_KEYS = {
+  priceListId: "priceListId",
+  salesHistory: "salesHistory",
+  nextNumber: "nextNumber",
+  lastDay: "lastDay",
 }
 
 export default function RemitoPage() {
@@ -45,20 +59,96 @@ export default function RemitoPage() {
   const [showPreview, setShowPreview] = useState(false)
   const [salesHistory, setSalesHistory] = useState<SaleRecord[]>([])
 
-  // ✅ Congelar fecha del remito actual sin depender de “mounted”
+  // Lista seleccionada
+  const [priceListId, setPriceListId] = useState<PriceListId>("minorista")
+
+  // Congelar fecha del remito actual
   const remitoDateRef = useRef<string>(getTodayDateSafe())
 
-  // ✅ Manejo de impresión robusto (sin timeouts)
+  // Manejo de impresión robusto
   const printIntentRef = useRef<null | "print" | "preview">(null)
 
-  // (Si realmente lo necesitás para evitar mismatch por alguna razón, dejalo.
-  // En general, acá no estás usando nada que rompa SSR/hidratación)
   const [mounted, setMounted] = useState(false)
   useEffect(() => setMounted(true), [])
 
+  // ✅ Restaurar estado al cargar + reset diario de ventas (arranca en cero cada día)
   useEffect(() => {
-    const url = process.env.NEXT_PUBLIC_PRODUCTS_CSV_URL
-    if (!url) return
+    try {
+      const today = getTodayDateSafe()
+      const lastDay = localStorage.getItem(LS_KEYS.lastDay)
+
+      // Nuevo día: arrancar de cero ventas del día
+      if (lastDay && lastDay !== today) {
+        localStorage.removeItem(LS_KEYS.salesHistory)
+        setSalesHistory([])
+      }
+
+      // Guardar día actual
+      localStorage.setItem(LS_KEYS.lastDay, today)
+
+      // Restaurar lista elegida
+      const savedList = localStorage.getItem(LS_KEYS.priceListId) as PriceListId | null
+      if (savedList === "minorista" || savedList === "mayorista" || savedList === "oferta") {
+        setPriceListId(savedList)
+      }
+
+      // Restaurar nextNumber
+      const savedNext = localStorage.getItem(LS_KEYS.nextNumber)
+      if (savedNext) {
+        const n = Number(savedNext)
+        if (Number.isFinite(n) && n > 0) setNextNumber(n)
+      }
+
+      // Restaurar historial (si no se limpió)
+      const savedHistory = localStorage.getItem(LS_KEYS.salesHistory)
+      if (savedHistory) {
+        const parsed = JSON.parse(savedHistory) as SaleRecord[]
+        if (Array.isArray(parsed)) setSalesHistory(parsed)
+      }
+    } catch {
+      // nada
+    }
+  }, [])
+
+  // Persistir priceListId
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_KEYS.priceListId, priceListId)
+    } catch {
+      // nada
+    }
+  }, [priceListId])
+
+  // Persistir nextNumber
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_KEYS.nextNumber, String(nextNumber))
+    } catch {
+      // nada
+    }
+  }, [nextNumber])
+
+  // Persistir salesHistory
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_KEYS.salesHistory, JSON.stringify(salesHistory))
+    } catch {
+      // nada
+    }
+  }, [salesHistory])
+
+  // Cargar productos según lista elegida
+  useEffect(() => {
+    const selected = PRICE_LISTS.find((x) => x.id === priceListId)
+    const url = selected?.url
+
+    if (!url) {
+      if (process.env.NODE_ENV !== "production") {
+        // eslint-disable-next-line no-console
+        console.warn(`Falta la env para la lista "${priceListId}". Revisá NEXT_PUBLIC_LISTA_*_URL`)
+      }
+      return
+    }
 
     const controller = new AbortController()
 
@@ -73,15 +163,11 @@ export default function RemitoPage() {
         const text = await res.text()
         const loaded = parseCSV(text)
 
-        // ✅ startTransition: evita “tironeo” si el CSV es grande
         startTransition(() => setProducts(loaded))
 
-        // ✅ logs solo en dev
         if (process.env.NODE_ENV !== "production") {
           // eslint-disable-next-line no-console
-          console.log("PRODUCTOS:", loaded.length)
-          // eslint-disable-next-line no-console
-          console.log("CÓDIGOS ÚNICOS:", new Set(loaded.map((p) => p.codigo)).size)
+          console.log(`[${priceListId}] PRODUCTOS:`, loaded.length)
         }
       } catch (e) {
         if ((e as any)?.name === "AbortError") return
@@ -91,7 +177,7 @@ export default function RemitoPage() {
 
     load()
     return () => controller.abort()
-  }, [])
+  }, [priceListId])
 
   const remitoNumero = useMemo(() => formatRemitoNumber(nextNumber), [nextNumber])
 
@@ -112,7 +198,6 @@ export default function RemitoPage() {
   const canPrint = items.length > 0
 
   const recordSale = useCallback(() => {
-    // ✅ Evita depender de mil deps: usa lo que ya está memoizado
     const record: SaleRecord = {
       id: crypto.randomUUID(),
       numero: remitoData.numero,
@@ -135,7 +220,6 @@ export default function RemitoPage() {
 
   useEffect(() => {
     const onAfterPrint = () => {
-      // ✅ Solo resetea si realmente disparaste una impresión desde acá
       if (!printIntentRef.current) return
       printIntentRef.current = null
       resetForNext()
@@ -163,12 +247,40 @@ export default function RemitoPage() {
   const handleNewRemito = useCallback(() => {
     setClient(defaultClient)
     setItems([])
-    // ❗ No tocamos número ni fecha: “Nuevo remito” acá era limpiar el actual.
   }, [])
 
   const handleClearItems = useCallback(() => {
     setItems([])
   }, [])
+
+  // Descargar CSV del día
+  const downloadTodaySalesCSV = useCallback(() => {
+    const today = getTodayDateSafe()
+    const todays = salesHistory.filter((r) => r.fecha === today)
+
+    const escapeCSV = (v: string) => `"${String(v ?? "").replace(/"/g, '""')}"`
+    const header = ["Nro Remito", "Fecha", "Cliente", "Total"]
+
+    const rows = todays.map((r) => [escapeCSV(r.numero), escapeCSV(r.fecha), escapeCSV(r.cliente || ""), String(r.total)])
+
+    const totalHoy = todays.reduce((s, r) => s + r.total, 0)
+    rows.push(["", "", escapeCSV("TOTAL DEL DÍA"), String(totalHoy)])
+
+    const csv = [header.join(","), ...rows.map((row) => row.join(","))].join("\n")
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" })
+
+    const safeDate = today.replaceAll("/", "-")
+    const filename = `ventas-${safeDate}.csv`
+
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  }, [salesHistory])
 
   if (!mounted) {
     return (
@@ -220,18 +332,37 @@ export default function RemitoPage() {
         <main className="mx-auto max-w-5xl px-4 py-6 lg:px-6 pb-24 overflow-x-hidden">
           <div className="flex flex-col gap-6">
             <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl bg-card border p-4">
-              <div className="flex items-center gap-4">
+              <div className="flex flex-wrap items-center gap-4">
                 <div>
                   <p className="text-xs text-muted-foreground uppercase tracking-wide">Comprobante</p>
                   <p className="text-lg font-bold font-mono text-foreground">
                     {"N\u00BA"} {remitoNumero}
                   </p>
                 </div>
+
                 <div className="h-8 w-px bg-border" />
+
                 <div>
                   <p className="text-xs text-muted-foreground uppercase tracking-wide">Fecha</p>
                   <p className="text-sm font-semibold text-foreground">{remitoDateRef.current}</p>
                 </div>
+
+                <div className="h-8 w-px bg-border hidden sm:block" />
+
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs text-muted-foreground uppercase tracking-wide">Lista</span>
+                  <select
+                    className="border rounded px-3 py-2 text-sm bg-background"
+                    value={priceListId}
+                    onChange={(e) => setPriceListId(e.target.value as PriceListId)}
+                  >
+                    {PRICE_LISTS.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               </div>
 
               {items.length > 0 && (
@@ -240,6 +371,13 @@ export default function RemitoPage() {
                   <p className="text-xl font-bold text-primary">{formatCurrency(total)}</p>
                 </div>
               )}
+            </div>
+
+            <div className="flex justify-end">
+              <Button variant="outline" size="sm" onClick={downloadTodaySalesCSV} disabled={salesHistory.length === 0}>
+                <Download className="size-4" />
+                Descargar ventas de hoy
+              </Button>
             </div>
 
             <SalesHistory records={salesHistory} onClear={() => setSalesHistory([])} />
@@ -279,7 +417,6 @@ export default function RemitoPage() {
           </div>
         </main>
 
-        {/* Footer móvil fijo */}
         <div className="fixed inset-x-0 bottom-0 z-50 border-t bg-card/95 backdrop-blur sm:hidden">
           <div className="px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+0.4rem)] flex items-center justify-between gap-2">
             <div className="min-w-0">
@@ -301,14 +438,7 @@ export default function RemitoPage() {
                 <Trash2 className="size-4" />
               </Button>
 
-              <Button
-                variant="outline"
-                size="icon"
-                disabled={!canPrint}
-                onClick={() => setShowPreview(true)}
-                aria-label="Ver"
-                className="h-9 w-9"
-              >
+              <Button variant="outline" size="icon" disabled={!canPrint} onClick={() => setShowPreview(true)} aria-label="Ver" className="h-9 w-9">
                 <Eye className="size-4" />
               </Button>
 
@@ -346,7 +476,6 @@ export default function RemitoPage() {
         </Dialog>
       )}
 
-      {/* ✅ Importante: mantené este bloque para print */}
       <div id="printable-remito">
         <RemitoPrint data={remitoData} />
       </div>

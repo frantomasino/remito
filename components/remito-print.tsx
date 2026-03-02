@@ -103,7 +103,8 @@ export const RemitoPrint = forwardRef<HTMLDivElement, RemitoPrintProps>(function
               {rows.map((item, idx) => (
                 <tr key={idx} className="h-8 border-b border-foreground/30">
                   <td className="border-r border-foreground/30 px-2 sm:px-3 py-1.5 text-foreground whitespace-normal break-words">
-                    {item.product.descripcion}
+                    {item.product.descripcion.replace(/\([^)]*\)/g, "").trim()}
+{item.opcion ? ` — ${item.opcion}` : ""}
                   </td>
                   <td className="border-r border-foreground/30 px-2 sm:px-3 py-1.5 text-center text-foreground">
                     {item.cantidad}

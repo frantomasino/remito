@@ -1,5 +1,4 @@
 export interface Product {
-  codigo: string
   descripcion: string
   precio: number
 }
@@ -8,6 +7,7 @@ export interface LineItem {
   product: Product
   cantidad: number
   subtotal: number
+  opcion?: string
 }
 
 export interface ClientData {
@@ -70,12 +70,14 @@ export function parseCSV(text: string): Product[] {
 
     s = s.replace(/\$/g, "").replace(/\s+/g, "")
 
+    // 1.234,56
     if (s.includes(".") && s.includes(",")) {
       s = s.replace(/\./g, "").replace(",", ".")
       const n = Number(s)
       return Number.isFinite(n) ? n : NaN
     }
 
+    // 1.388 (miles) o 12.5 (decimal)
     if (s.includes(".") && !s.includes(",")) {
       const parts = s.split(".")
       const last = parts[parts.length - 1]
@@ -88,6 +90,7 @@ export function parseCSV(text: string): Product[] {
       return Number.isFinite(n) ? n : NaN
     }
 
+    // 12,5
     if (s.includes(",") && !s.includes(".")) {
       s = s.replace(",", ".")
       const n = Number(s)
@@ -100,17 +103,18 @@ export function parseCSV(text: string): Product[] {
 
   const headerLine = lines[0]
   const separator = detectDelimiter(headerLine)
-
   const headers = headerLine.split(separator).map(normalizeHeader)
 
-  const codigoIdx = headers.findIndex(
-    (h) => h.includes("codigo") || h.includes("cod") || h.includes("id") || h.includes("sku")
-  )
   const descripcionIdx = headers.findIndex(
     (h) => h.includes("descripcion") || h.includes("nombre") || h.includes("producto") || h.includes("detalle")
   )
   const precioIdx = headers.findIndex(
-    (h) => h.includes("precio") || h.includes("price") || h.includes("valor") || h.includes("importe") || h.includes("costo")
+    (h) =>
+      h.includes("precio") ||
+      h.includes("price") ||
+      h.includes("valor") ||
+      h.includes("importe") ||
+      h.includes("costo")
   )
 
   const headerOk = descripcionIdx !== -1 && precioIdx !== -1
@@ -124,20 +128,15 @@ export function parseCSV(text: string): Product[] {
 
     const cols = line.split(separator).map((c) => c.trim().replace(/"/g, ""))
 
-    let codigo = ""
     let descripcion = ""
     let precioRaw = ""
 
     if (headerOk) {
-      codigo = codigoIdx >= 0 ? cols[codigoIdx] || "" : ""
       descripcion = cols[descripcionIdx] || ""
       precioRaw = cols[precioIdx] || ""
     } else {
-      if (cols.length >= 3) {
-        codigo = cols[0] || ""
-        descripcion = cols[1] || ""
-        precioRaw = cols[2] || ""
-      } else if (cols.length === 2) {
+      // fallback sin encabezados
+      if (cols.length >= 2) {
         descripcion = cols[0] || ""
         precioRaw = cols[1] || ""
       } else {
@@ -150,14 +149,12 @@ export function parseCSV(text: string): Product[] {
     const precio = parsePrice(precioRaw)
     if (!Number.isFinite(precio) || precio <= 0) continue
 
-    if (!codigo) codigo = `AUTO${String(products.length + 1).padStart(3, "0")}`
-
-    // elimina duplicados exactos (vos tenés una fila repetida)
-    const key = `${codigo}||${descripcion}||${precio}`
+    // elimina duplicados exactos
+    const key = `${descripcion}||${precio}`
     if (seen.has(key)) continue
     seen.add(key)
 
-    products.push({ codigo, descripcion, precio })
+    products.push({ descripcion, precio })
   }
 
   return products

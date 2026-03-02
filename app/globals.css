@@ -1,5 +1,5 @@
-@import 'tailwindcss';
-@import 'tw-animate-css';
+@import "tailwindcss";
+@import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -75,8 +75,8 @@
 }
 
 @theme inline {
-  --font-sans: 'Geist', 'Geist Fallback';
-  --font-mono: 'Geist Mono', 'Geist Mono Fallback';
+  --font-sans: "Geist", "Geist Fallback";
+  --font-mono: "Geist Mono", "Geist Mono Fallback";
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -124,38 +124,56 @@
   }
 }
 
-/* Hide printable remito on screen */
+/* --- Layout safety --- */
+html,
+body {
+  overflow-x: hidden;
+  width: 100%;
+}
+
+#screen-ui {
+  overflow-x: hidden;
+  width: 100%;
+}
+
+/* evita el “arrastre” lateral en iOS */
+body {
+  overscroll-behavior-x: none;
+}
+
+/* --- Print: por defecto oculto en pantalla --- */
 #printable-remito {
   display: none;
 }
 
+/* --- Print rules --- */
 @media print {
   @page {
     margin: 10mm;
     size: A4;
   }
 
-  /* Hide everything on screen */
+  /* Oculta UI normal + overlays/portals */
   #screen-ui,
   [role="dialog"],
   [data-radix-portal] {
     display: none !important;
   }
 
-  /* Show the printable remito */
+  /* Muestra SOLO lo printable */
   #printable-remito {
     display: block !important;
-    position: absolute;
-    top: 0;
-    left: 0;
+    position: fixed;
+    inset: 0;
     width: 100%;
+    background: white !important;
   }
 
-  html, body {
+  html,
+  body {
     background: white !important;
     margin: 0 !important;
     padding: 0 !important;
-    color-adjust: exact !important;
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
   }
@@ -184,22 +202,5 @@
   .remito-print th {
     border: 1px solid #000 !important;
     padding: 4px 8px;
-  
-}
-
-html, body {
-  overflow-x: hidden;
-  width: 100%;
-}
-
-#screen-ui {
-  overflow-x: hidden;
-  width: 100%;
-}
-
-/* evita el “arrastre” lateral en iOS */
-body {
-  overscroll-behavior-x: none;
-}
-
+  }
 }
