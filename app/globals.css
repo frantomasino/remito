@@ -146,27 +146,38 @@ body {
   display: none;
 }
 
-/* --- Print rules --- */
+/* --- Print rules (FIX DEFINITIVO: imprime SOLO el remito) --- */
 @media print {
   @page {
     margin: 10mm;
     size: A4;
   }
 
-  /* Oculta UI normal + overlays/portals */
-  #screen-ui,
+  /* ✅ Ocultá TODO el documento */
+  body * {
+    visibility: hidden !important;
+  }
+
+  /* ✅ Mostrá SOLO printable-remito */
+  #printable-remito,
+  #printable-remito * {
+    visibility: visible !important;
+  }
+
+  /* ✅ Ubicalo arriba de todo (evita que se meta la bottom bar) */
+  #printable-remito {
+    display: block !important;
+    position: fixed !important;
+    inset: 0 !important;
+    width: 100% !important;
+    background: white !important;
+    z-index: 999999 !important;
+  }
+
+  /* Por si quedara algún overlay/portal */
   [role="dialog"],
   [data-radix-portal] {
     display: none !important;
-  }
-
-  /* Muestra SOLO lo printable */
-  #printable-remito {
-    display: block !important;
-    position: fixed;
-    inset: 0;
-    width: 100%;
-    background: white !important;
   }
 
   html,
@@ -178,6 +189,7 @@ body {
     print-color-adjust: exact !important;
   }
 
+  /* Tu estilo de remito */
   .remito-print {
     background: white !important;
     color: black !important;
