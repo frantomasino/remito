@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { Suspense, useEffect, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Eye, EyeOff } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
@@ -10,18 +10,15 @@ import { Label } from "@/components/ui/label"
 
 function translateSupabaseError(msg: string) {
   const m = msg.toLowerCase()
-
   if (m.includes("new password should be different")) return "La nueva contraseña debe ser diferente a la anterior."
   if (m.includes("password should be at least")) return "La contraseña debe tener al menos 6 caracteres."
-  if (m.includes("invalid") && (m.includes("token") || m.includes("code"))) {
+  if (m.includes("invalid") && (m.includes("token") || m.includes("code")))
     return "El enlace de recuperación es inválido o ya venció. Pedí uno nuevo."
-  }
   if (m.includes("expired")) return "El enlace de recuperación venció. Pedí uno nuevo."
-
   return msg
 }
 
-export default function ResetPasswordPage() {
+function ResetPasswordInner() {
   const router = useRouter()
   const params = useSearchParams()
 
@@ -44,7 +41,6 @@ export default function ResetPasswordPage() {
       setChecking(true)
       setError(null)
 
-      // ✅ Supabase ahora manda ?code=...
       const code = params.get("code")
 
       try {
@@ -58,10 +54,9 @@ export default function ResetPasswordPage() {
           }
         }
 
-        // si ya hay sesión (por exchange o porque el navegador la tiene)
         const { data } = await supabase.auth.getSession()
         setReady(!!data.session)
-      } catch (e: any) {
+      } catch {
         setReady(false)
         setError("No se pudo validar el enlace. Pedí uno nuevo.")
       } finally {
@@ -70,7 +65,6 @@ export default function ResetPasswordPage() {
     }
 
     run()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params])
 
   async function onSubmit(e: React.FormEvent) {
@@ -88,10 +82,8 @@ export default function ResetPasswordPage() {
     }
 
     setLoading(true)
-
     const supabase = createClient()
     const { error } = await supabase.auth.updateUser({ password })
-
     setLoading(false)
 
     if (error) {
@@ -121,7 +113,6 @@ export default function ResetPasswordPage() {
               <Label htmlFor="password" className="text-sm font-medium text-foreground">
                 Nueva contraseña
               </Label>
-
               <div className="relative">
                 <Input
                   id="password"
@@ -146,7 +137,6 @@ export default function ResetPasswordPage() {
               <Label htmlFor="confirm" className="text-sm font-medium text-foreground">
                 Confirmar contraseña
               </Label>
-
               <div className="relative">
                 <Input
                   id="confirm"
@@ -172,7 +162,6 @@ export default function ResetPasswordPage() {
                 {error}
               </p>
             )}
-
             {success && (
               <p className="text-sm text-green-600 text-center" role="status">
                 {success}
@@ -186,5 +175,19 @@ export default function ResetPasswordPage() {
         )}
       </div>
     </div>
+  )
+}
+
+export default function ResetPasswordPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-dvh items-center justify-center bg-background px-6">
+          <p className="text-sm text-muted-foreground">Cargando...</p>
+        </div>
+      }
+    >
+      <ResetPasswordInner />
+    </Suspense>
   )
 }
