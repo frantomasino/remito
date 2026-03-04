@@ -71,7 +71,7 @@ export default function LoginPage() {
 
           <div className="flex flex-col gap-2">
             <Label htmlFor="password" className="text-sm font-medium text-foreground">
-              Contrasena
+              Contraseña
             </Label>
             <div className="relative">
               <Input
@@ -83,6 +83,12 @@ export default function LoginPage() {
                 required
                 className="h-12 rounded-xl pr-12"
               />
+
+              <p className="text-right text-sm">
+  <Link href="/auth/forgot-password" className="text-primary underline underline-offset-4">
+    ¿Olvidaste tu contraseña?
+  </Link>
+</p>
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
