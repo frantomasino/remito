@@ -2,7 +2,7 @@
 
 import { createClient } from "@/lib/supabase/client"
 import { useState, useRef, useCallback, useEffect, useMemo, startTransition } from "react"
-import { Printer, Eye, FileText, RotateCcw, Trash2 } from "lucide-react"
+import { Printer, Eye, FileText, RotateCcw, Trash2, CheckCircle2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ClientForm } from "@/components/client-form"
@@ -72,18 +72,41 @@ export default function RemitoPage() {
   const [mounted, setMounted] = useState(false)
   useEffect(() => setMounted(true), [])
 
-  // ✅ obtener userId (para separar localStorage por usuario)
-  useEffect(() => {
-    const supabase = createClient()
-    supabase.auth.getUser().then(({ data }) => {
-      setUserId(data.user?.id ?? "")
-    })
+  // ✅ Haptic / vibración (Android/PWA suele andar; iOS normalmente no)
+  const haptic = useCallback((pattern: number | number[] = 12) => {
+    try {
+      if ("vibrate" in navigator) {
+        // vibrate() devuelve boolean en algunos browsers
+        navigator.vibrate(pattern)
+      }
+    } catch {
+      // nada
+    }
   }, [])
 
-  // ✅ restore + reset diario (POR USUARIO) — sin migración
+  // ✅ Toast "agregado"
+  const toastTimer = useRef<number | null>(null)
+  const [toast, setToast] = useState<{ open: boolean; text: string }>({ open: false, text: "" })
+
+  const showToast = useCallback(
+    (text: string, withHaptic = true) => {
+      setToast({ open: true, text })
+      if (withHaptic) haptic([10, 30, 10]) // “tap tap” cortito
+      if (toastTimer.current) window.clearTimeout(toastTimer.current)
+      toastTimer.current = window.setTimeout(() => setToast({ open: false, text: "" }), 1500)
+    },
+    [haptic],
+  )
+
+  // userId
+  useEffect(() => {
+    const supabase = createClient()
+    supabase.auth.getUser().then(({ data }) => setUserId(data.user?.id ?? ""))
+  }, [])
+
+  // restore por usuario
   useEffect(() => {
     if (!userId) return
-
     try {
       const today = getTodayDateSafe()
 
@@ -92,7 +115,6 @@ export default function RemitoPage() {
       const listKey = k(LS_BASE_KEYS.priceListId, userId)
       const lastDayKey = k(LS_BASE_KEYS.lastDay, userId)
 
-      // reset diario por usuario
       const lastDay = localStorage.getItem(lastDayKey)
       if (lastDay && lastDay !== today) {
         localStorage.removeItem(salesKey)
@@ -100,28 +122,23 @@ export default function RemitoPage() {
       }
       localStorage.setItem(lastDayKey, today)
 
-      // restore lista
       const savedList = localStorage.getItem(listKey) as PriceListId | null
       if (savedList === "minorista" || savedList === "mayorista" || savedList === "oferta") {
         setPriceListId(savedList)
       }
 
-      // restore next
       const savedNext = localStorage.getItem(nextKey)
       if (savedNext) {
         const n = Number(savedNext)
         if (Number.isFinite(n) && n > 0) setNextNumber(n)
       }
 
-      // restore history
       const savedHistory = localStorage.getItem(salesKey)
       if (savedHistory) {
         const parsed = JSON.parse(savedHistory) as SaleRecord[]
         if (Array.isArray(parsed)) setSalesHistory(parsed)
       }
-    } catch {
-      // nada
-    }
+    } catch {}
   }, [userId])
 
   useEffect(() => {
@@ -138,17 +155,23 @@ export default function RemitoPage() {
     } catch {}
   }, [nextNumber, userId])
 
-  // ✅ load products (Google Sheets)
+  // ✅ Detectar "agregado" por diferencia de cantidad (sin romper tipos)
+  const prevCountRef = useRef(0)
+  useEffect(() => {
+    const prev = prevCountRef.current
+    const next = items.length
+    prevCountRef.current = next
+
+    if (next > prev) {
+      showToast("Producto agregado ✅", true)
+    }
+  }, [items.length, showToast])
+
+  // productos (Google Sheets)
   useEffect(() => {
     const selected = PRICE_LISTS.find((x) => x.id === priceListId)
     const url = selected?.url
-
-    if (!url) {
-      if (process.env.NODE_ENV !== "production") {
-        console.warn(`Falta la env para la lista "${priceListId}". Revisá NEXT_PUBLIC_LISTA_*_URL`)
-      }
-      return
-    }
+    if (!url) return
 
     const controller = new AbortController()
 
@@ -159,10 +182,8 @@ export default function RemitoPage() {
           signal: controller.signal,
         })
         if (!res.ok) throw new Error("No se pudo traer el CSV/TSV")
-
         const text = await res.text()
-        const loaded = parseCSV(text)
-        startTransition(() => setProducts(loaded))
+        startTransition(() => setProducts(parseCSV(text)))
       } catch (e) {
         if ((e as any)?.name === "AbortError") return
         console.error("No se pudieron cargar productos desde Google Sheets", e)
@@ -190,16 +211,19 @@ export default function RemitoPage() {
 
   const canPrint = items.length > 0
 
-  // ✅ guardar historial EN EL MOMENTO de agregar el remito (POR USUARIO)
+  // historial (cliente opcional)
   const recordSale = useCallback(() => {
     if (!userId) return
+
+    const clienteNombre = (remitoData.client.nombre ?? "").trim()
+    const formaPago = (remitoData.client.formaPago ?? "").trim()
 
     const record: SaleRecord = {
       id: crypto.randomUUID(),
       numero: remitoData.numero,
       fecha: remitoData.fecha,
-      cliente: remitoData.client.nombre,
-      formaPago: remitoData.client.formaPago || "Sin especificar",
+      cliente: clienteNombre || "Sin cliente",
+      formaPago: formaPago || "Sin especificar",
       total: remitoData.total,
       itemCount: remitoData.items.length,
     }
@@ -213,7 +237,6 @@ export default function RemitoPage() {
     })
   }, [remitoData, userId])
 
-  // ✅ CLAVE: avanzar consecutivo y resetear ANTES de imprimir (no depender de afterprint)
   const advanceAndReset = useCallback(() => {
     setNextNumber((n) => {
       const next = n + 1
@@ -228,7 +251,6 @@ export default function RemitoPage() {
     remitoDateRef.current = getTodayDateSafe()
   }, [userId])
 
-  // ✅ iOS fix: abrir ventana con botón "Imprimir" (gesto real)
   const openIOSPrintWindow = useCallback(() => {
     const printable = document.getElementById("printable-remito")
     if (!printable) return
@@ -287,6 +309,9 @@ ${styles}
   const handlePrint = useCallback(() => {
     if (!canPrint) return
 
+    // ✅ mini haptic al imprimir (opcional)
+    haptic([20])
+
     recordSale()
     advanceAndReset()
 
@@ -294,14 +319,15 @@ ${styles}
       openIOSPrintWindow()
       return
     }
-
     window.print()
-  }, [canPrint, recordSale, advanceAndReset, openIOSPrintWindow])
+  }, [canPrint, recordSale, advanceAndReset, openIOSPrintWindow, haptic])
 
   const handlePreviewPrint = useCallback(() => {
     if (!canPrint) return
 
     setShowPreview(false)
+    haptic([20])
+
     recordSale()
     advanceAndReset()
 
@@ -309,18 +335,19 @@ ${styles}
       openIOSPrintWindow()
       return
     }
-
     window.print()
-  }, [canPrint, recordSale, advanceAndReset, openIOSPrintWindow])
+  }, [canPrint, recordSale, advanceAndReset, openIOSPrintWindow, haptic])
 
   const handleNewRemito = useCallback(() => {
     setClient(defaultClient)
     setItems([])
-  }, [])
+    showToast("Nuevo remito listo ✅", true)
+  }, [showToast])
 
   const handleClearItems = useCallback(() => {
     setItems([])
-  }, [])
+    showToast("Productos vaciados", true)
+  }, [showToast])
 
   if (!mounted) {
     return (
@@ -338,116 +365,108 @@ ${styles}
   return (
     <>
       <div id="screen-ui" className="min-h-screen bg-background overflow-x-hidden">
+        {/* ✅ HEADER NUEVO (simple, mobile-first) */}
         <header className="sticky top-0 z-40 border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
-          <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3 lg:px-6">
-            <div className="flex items-center gap-3">
-              <div className="flex size-9 items-center justify-center rounded-lg bg-primary">
+          <div className="mx-auto flex max-w-5xl items-center gap-3 px-4 py-3 lg:px-6">
+            {/* Izquierda: icono + fecha + nro */}
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="flex size-9 items-center justify-center rounded-lg bg-primary shrink-0">
                 <FileText className="size-5 text-primary-foreground" />
               </div>
-              <div>
-                <h1 className="text-lg font-bold text-foreground leading-tight">Generador de Remitos</h1>
-                <p className="text-xs text-muted-foreground">Crea comprobantes para tus clientes</p>
+
+              <div className="min-w-0">
+                <div className="text-xs text-muted-foreground leading-none truncate">
+                  {remitoDateRef.current}
+                </div>
+                <div className="text-sm font-semibold text-foreground leading-tight truncate">
+                  N° {remitoNumero}
+                </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={handleNewRemito}>
-                <RotateCcw className="size-4" />
-                <span className="hidden sm:inline">Nuevo Remito</span>
-              </Button>
+            {/* Derecha: Lista + acciones */}
+            <div className="ml-auto flex items-center gap-2">
+              <select
+                className="h-9 rounded-lg border bg-background px-2 text-sm"
+                value={priceListId}
+                onChange={(e) => setPriceListId(e.target.value as PriceListId)}
+                aria-label="Lista de precios"
+              >
+                {PRICE_LISTS.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.label}
+                  </option>
+                ))}
+              </select>
 
-              <Button variant="outline" size="sm" disabled={!canPrint} onClick={() => setShowPreview(true)}>
+              <Button
+                variant="outline"
+                size="icon"
+                disabled={!canPrint}
+                onClick={() => setShowPreview(true)}
+                aria-label="Vista previa"
+                className="h-9 w-9"
+              >
                 <Eye className="size-4" />
-                <span className="hidden sm:inline">Vista Previa</span>
               </Button>
 
-              <Button size="sm" onClick={handlePrint} disabled={!canPrint}>
+              <Button size="sm" onClick={handlePrint} disabled={!canPrint} className="h-9 rounded-lg">
                 <Printer className="size-4" />
-                <span className="hidden sm:inline">Imprimir</span>
+                <span className="hidden sm:inline ml-2">Imprimir</span>
               </Button>
             </div>
           </div>
+
+          {/* Total: discreto */}
+          {items.length > 0 && (
+            <div className="mx-auto max-w-5xl px-4 pb-3 lg:px-6">
+              <div className="flex justify-end">
+                <span className="text-sm font-semibold text-primary">
+                  Total: {formatCurrency(total)}
+                </span>
+              </div>
+            </div>
+          )}
         </header>
 
-        <main className="mx-auto max-w-5xl px-4 py-6 lg:px-6 pb-24 overflow-x-hidden">
+        <main className="mx-auto max-w-5xl px-4 py-5 lg:px-6 pb-24 overflow-x-hidden">
           <div className="flex flex-col gap-6">
-            <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl bg-card border p-4">
-              <div className="flex flex-wrap items-center gap-4">
-                <div>
-                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Comprobante</p>
-                  <p className="text-lg font-bold font-mono text-foreground">
-                    {"N\u00BA"} {remitoNumero}
-                  </p>
-                </div>
-
-                <div className="h-8 w-px bg-border" />
-
-                <div>
-                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Fecha</p>
-                  <p className="text-sm font-semibold text-foreground">{remitoDateRef.current}</p>
-                </div>
-
-                <div className="h-8 w-px bg-border hidden sm:block" />
-
-                <label className="flex flex-col gap-1">
-                  <span className="text-xs text-muted-foreground uppercase tracking-wide">Lista</span>
-                  <select
-                    className="border rounded px-3 py-2 text-sm bg-background"
-                    value={priceListId}
-                    onChange={(e) => setPriceListId(e.target.value as PriceListId)}
-                  >
-                    {PRICE_LISTS.map((l) => (
-                      <option key={l.id} value={l.id}>
-                        {l.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+            {/* Productos primero */}
+            <section className="rounded-xl bg-card border p-4 sm:p-5">
+              <h2 className="text-base font-semibold text-foreground">Productos</h2>
+              <p className="mt-1 text-xs text-muted-foreground">Buscá y agregá productos.</p>
+              <div className="mt-4">
+                <ProductSelector products={products} items={items} onItemsChange={setItems} />
               </div>
+            </section>
 
-              {items.length > 0 && (
-                <div className="text-right">
-                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Total</p>
-                  <p className="text-xl font-bold text-primary">{formatCurrency(total)}</p>
-                </div>
-              )}
+            {/* Cliente opcional (chico) */}
+            <section className="rounded-xl bg-card border p-4 sm:p-5">
+              <h2 className="text-sm font-semibold text-foreground">Cliente (opcional)</h2>
+              <div className="mt-4">
+                <ClientForm data={client} onChange={setClient} />
+              </div>
+            </section>
+
+            {/* Acciones secundarias en desktop */}
+            <div className="hidden sm:flex justify-end gap-3 pb-8">
+              <Button variant="outline" size="lg" onClick={handleNewRemito}>
+                <RotateCcw className="size-4" />
+                Nuevo
+              </Button>
+              <Button variant="outline" size="lg" onClick={() => setShowPreview(true)} disabled={!canPrint}>
+                <Eye className="size-4" />
+                Vista previa
+              </Button>
+              <Button size="lg" onClick={handlePrint} disabled={!canPrint}>
+                <Printer className="size-4" />
+                Imprimir
+              </Button>
             </div>
-
-            <section className="rounded-xl bg-card border p-5">
-              <div className="flex items-center gap-3 mb-4">
-                <span className="flex size-7 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
-                  2
-                </span>
-                <h2 className="text-base font-semibold text-foreground">Datos del Cliente</h2>
-              </div>
-              <ClientForm data={client} onChange={setClient} />
-            </section>
-
-            <section className="rounded-xl bg-card border p-5">
-              <div className="flex items-center gap-3 mb-4">
-                <span className="flex size-7 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
-                  3
-                </span>
-                <h2 className="text-base font-semibold text-foreground">Seleccionar Productos</h2>
-              </div>
-              <ProductSelector products={products} items={items} onItemsChange={setItems} />
-            </section>
-
-            {canPrint && (
-              <div className="hidden sm:flex justify-end gap-3 pb-8">
-                <Button variant="outline" size="lg" onClick={() => setShowPreview(true)}>
-                  <Eye className="size-4" />
-                  Vista Previa
-                </Button>
-                <Button size="lg" onClick={handlePrint}>
-                  <Printer className="size-4" />
-                  Imprimir Remito
-                </Button>
-              </div>
-            )}
           </div>
         </main>
 
+        {/* Barra mobile inferior (acciones rápidas) */}
         <div className="fixed inset-x-0 bottom-0 z-50 border-t bg-card/95 backdrop-blur sm:hidden">
           <div className="px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+0.4rem)] flex items-center justify-between gap-2">
             <div className="min-w-0">
@@ -486,8 +505,22 @@ ${styles}
             </div>
           </div>
         </div>
+
+        {/* ✅ Toast feedback */}
+        {toast.open && (
+          <div
+            className="fixed left-1/2 z-[60] -translate-x-1/2"
+            style={{ bottom: `calc(72px + env(safe-area-inset-bottom) + 70px)` }}
+          >
+            <div className="flex items-center gap-2 rounded-full border bg-background px-4 py-2 shadow">
+              <CheckCircle2 className="size-4 text-primary" />
+              <p className="text-sm text-foreground">{toast.text}</p>
+            </div>
+          </div>
+        )}
       </div>
 
+      {/* Modal preview */}
       {showPreview && (
         <Dialog open={showPreview} onOpenChange={setShowPreview}>
           <DialogContent
@@ -528,6 +561,7 @@ ${styles}
         </Dialog>
       )}
 
+      {/* Printable */}
       <div id="printable-remito">
         <RemitoPrint data={remitoData} />
       </div>

@@ -2,11 +2,10 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { ClipboardList, PlusCircle, User, LogOut } from "lucide-react"
+import { PlusCircle, User, LogOut } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const navItems = [
-  { href: "/dashboard", label: "Remitos", icon: ClipboardList },
   { href: "/dashboard/nuevo", label: "Nuevo", icon: PlusCircle },
   { href: "/dashboard/perfil", label: "Perfil", icon: User },
 ]
@@ -18,8 +17,7 @@ export function BottomNav() {
     <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-border bg-background/95 backdrop-blur-sm safe-area-bottom">
       <div className="flex items-center justify-around px-2 py-2">
         {navItems.map((item) => {
-          const isActive =
-            item.href === "/dashboard" ? pathname === "/dashboard" : pathname.startsWith(item.href)
+          const isActive = pathname.startsWith(item.href)
 
           return (
             <Link

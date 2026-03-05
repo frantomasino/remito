@@ -23,15 +23,36 @@ export default function LoginPage() {
     setError(null)
 
     const supabase = createClient()
-    const { error } = await supabase.auth.signInWithPassword({
+
+    const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
       email,
       password,
     })
 
-    if (error) {
+    if (signInError) {
       setError("Email o contrasena incorrectos")
       setLoading(false)
       return
+    }
+
+    // ✅ Guardar "último login" en public.profiles
+    // (No bloquea el login si falla)
+    try {
+      const userId = signInData.user?.id
+      const userEmail = signInData.user?.email ?? email
+
+      if (userId) {
+        await supabase.from("profiles").upsert(
+          {
+            id: userId,
+            email: userEmail,
+            last_login_at: new Date().toISOString(),
+          },
+          { onConflict: "id" },
+        )
+      }
+    } catch {
+      // nada
     }
 
     router.push("/dashboard")
@@ -45,12 +66,8 @@ export default function LoginPage() {
           <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary">
             <ClipboardList className="h-7 w-7 text-primary-foreground" />
           </div>
-          <h1 className="text-2xl font-bold text-foreground text-balance text-center">
-            Remitos
-          </h1>
-          <p className="text-sm text-muted-foreground text-center">
-            Ingresa a tu cuenta para gestionar tus remitos
-          </p>
+          <h1 className="text-2xl font-bold text-foreground text-balance text-center">Remitos</h1>
+          <p className="text-sm text-muted-foreground text-center">Ingresa a tu cuenta para gestionar tus remitos</p>
         </div>
 
         <form onSubmit={handleLogin} className="flex flex-col gap-5">
@@ -73,6 +90,7 @@ export default function LoginPage() {
             <Label htmlFor="password" className="text-sm font-medium text-foreground">
               Contraseña
             </Label>
+
             <div className="relative">
               <Input
                 id="password"
@@ -84,11 +102,6 @@ export default function LoginPage() {
                 className="h-12 rounded-xl pr-12"
               />
 
-              <p className="text-right text-sm">
-  <Link href="/auth/forgot-password" className="text-primary underline underline-offset-4">
-    ¿Olvidaste tu contraseña?
-  </Link>
-</p>
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
@@ -98,6 +111,12 @@ export default function LoginPage() {
                 {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
               </button>
             </div>
+
+            <p className="text-right text-sm">
+              <Link href="/auth/forgot-password" className="text-primary underline underline-offset-4">
+                ¿Olvidaste tu contraseña?
+              </Link>
+            </p>
           </div>
 
           {error && (
@@ -106,11 +125,7 @@ export default function LoginPage() {
             </p>
           )}
 
-          <Button
-            type="submit"
-            disabled={loading}
-            className="h-12 rounded-xl text-base font-semibold"
-          >
+          <Button type="submit" disabled={loading} className="h-12 rounded-xl text-base font-semibold">
             {loading ? "Ingresando..." : "Ingresar"}
           </Button>
         </form>

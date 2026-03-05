@@ -7,6 +7,12 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
+function translateForgotError(msg: string) {
+  const m = msg.toLowerCase()
+  if (m.includes("rate limit")) return "Se excedió el límite de envíos. Esperá unos minutos y probá de nuevo."
+  return msg
+}
+
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("")
   const [loading, setLoading] = useState(false)
@@ -29,7 +35,7 @@ export default function ForgotPasswordPage() {
     setLoading(false)
 
     if (error) {
-      setError(error.message)
+      setError(translateForgotError(error.message))
       return
     }
 
