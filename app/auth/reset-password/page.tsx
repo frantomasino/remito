@@ -12,10 +12,21 @@ function translateSupabaseError(msg: string) {
   const m = msg.toLowerCase()
   if (m.includes("new password should be different")) return "La nueva contraseña debe ser diferente a la anterior."
   if (m.includes("password should be at least")) return "La contraseña debe tener al menos 6 caracteres."
-  if (m.includes("invalid") && (m.includes("token") || m.includes("code")))
+  if (m.includes("rate limit")) return "Se excedió el límite de envíos. Esperá unos minutos y probá de nuevo."
+  if (m.includes("invalid") && (m.includes("token") || m.includes("code"))) {
     return "El enlace de recuperación es inválido o ya venció. Pedí uno nuevo."
+  }
   if (m.includes("expired")) return "El enlace de recuperación venció. Pedí uno nuevo."
   return msg
+}
+
+function parseHashTokens(hash: string) {
+  // hash viene como "#access_token=...&refresh_token=...&type=recovery"
+  const h = hash.startsWith("#") ? hash.slice(1) : hash
+  const p = new URLSearchParams(h)
+  const access_token = p.get("access_token")
+  const refresh_token = p.get("refresh_token")
+  return { access_token, refresh_token }
 }
 
 function ResetPasswordInner() {
@@ -41,9 +52,9 @@ function ResetPasswordInner() {
       setChecking(true)
       setError(null)
 
-      const code = params.get("code")
-
       try {
+        // ✅ 1) Soporta flow con ?code=...
+        const code = params.get("code")
         if (code) {
           const { error } = await supabase.auth.exchangeCodeForSession(code)
           if (error) {
@@ -52,13 +63,34 @@ function ResetPasswordInner() {
             setChecking(false)
             return
           }
+        } else if (typeof window !== "undefined" && window.location.hash) {
+          // ✅ 2) Soporta flow con #access_token=...&refresh_token=...
+          const { access_token, refresh_token } = parseHashTokens(window.location.hash)
+
+          if (access_token && refresh_token) {
+            const { error } = await supabase.auth.setSession({ access_token, refresh_token })
+            if (error) {
+              setReady(false)
+              setError(translateSupabaseError(error.message))
+              setChecking(false)
+              return
+            }
+
+            // Limpia el hash para que no quede expuesto
+            window.history.replaceState({}, document.title, window.location.pathname)
+          }
         }
 
+        // ✅ 3) Confirmar que ya hay sesión
         const { data } = await supabase.auth.getSession()
         setReady(!!data.session)
+
+        if (!data.session) {
+          setError("No se pudo validar el enlace. Pedí uno nuevo desde “Olvidé mi contraseña”.")
+        }
       } catch {
         setReady(false)
-        setError("No se pudo validar el enlace. Pedí uno nuevo.")
+        setError("No se pudo validar el enlace. Pedí uno nuevo desde “Olvidé mi contraseña”.")
       } finally {
         setChecking(false)
       }
@@ -104,9 +136,7 @@ function ResetPasswordInner() {
         {checking ? (
           <p className="mt-8 text-sm text-muted-foreground text-center">Validando enlace...</p>
         ) : !ready ? (
-          <p className="mt-8 text-sm text-muted-foreground text-center">
-            No se pudo validar el enlace. Pedí uno nuevo desde “Olvidé mi contraseña”.
-          </p>
+          <p className="mt-8 text-sm text-muted-foreground text-center">{error}</p>
         ) : (
           <form onSubmit={onSubmit} className="mt-8 flex flex-col gap-5">
             <div className="flex flex-col gap-2">
