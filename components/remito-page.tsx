@@ -56,6 +56,11 @@ function k(base: string, userId: string) {
 
 const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent)
 
+// altura estimada de tu BottomNav
+const BOTTOM_NAV_PX = 72
+// altura estimada de la barra de acciones mobile
+const ACTION_BAR_PX = 64
+
 export default function RemitoPage() {
   const [userId, setUserId] = useState<string>("")
 
@@ -72,31 +77,15 @@ export default function RemitoPage() {
   const [mounted, setMounted] = useState(false)
   useEffect(() => setMounted(true), [])
 
-  // ✅ Haptic / vibración (Android/PWA suele andar; iOS normalmente no)
-  const haptic = useCallback((pattern: number | number[] = 12) => {
-    try {
-      if ("vibrate" in navigator) {
-        // vibrate() devuelve boolean en algunos browsers
-        navigator.vibrate(pattern)
-      }
-    } catch {
-      // nada
-    }
-  }, [])
-
-  // ✅ Toast "agregado"
+  // ✅ Toast (sin vibración)
   const toastTimer = useRef<number | null>(null)
   const [toast, setToast] = useState<{ open: boolean; text: string }>({ open: false, text: "" })
 
-  const showToast = useCallback(
-    (text: string, withHaptic = true) => {
-      setToast({ open: true, text })
-      if (withHaptic) haptic([10, 30, 10]) // “tap tap” cortito
-      if (toastTimer.current) window.clearTimeout(toastTimer.current)
-      toastTimer.current = window.setTimeout(() => setToast({ open: false, text: "" }), 1500)
-    },
-    [haptic],
-  )
+  const showToast = useCallback((text: string) => {
+    setToast({ open: true, text })
+    if (toastTimer.current) window.clearTimeout(toastTimer.current)
+    toastTimer.current = window.setTimeout(() => setToast({ open: false, text: "" }), 1400)
+  }, [])
 
   // userId
   useEffect(() => {
@@ -155,16 +144,13 @@ export default function RemitoPage() {
     } catch {}
   }, [nextNumber, userId])
 
-  // ✅ Detectar "agregado" por diferencia de cantidad (sin romper tipos)
+  // ✅ Detectar agregado por diferencia de cantidad
   const prevCountRef = useRef(0)
   useEffect(() => {
     const prev = prevCountRef.current
     const next = items.length
     prevCountRef.current = next
-
-    if (next > prev) {
-      showToast("Producto agregado ✅", true)
-    }
+    if (next > prev) showToast("Producto agregado ✅")
   }, [items.length, showToast])
 
   // productos (Google Sheets)
@@ -174,7 +160,6 @@ export default function RemitoPage() {
     if (!url) return
 
     const controller = new AbortController()
-
     const load = async () => {
       try {
         const res = await fetch(`/api/products-csv?url=${encodeURIComponent(url)}`, {
@@ -211,7 +196,6 @@ export default function RemitoPage() {
 
   const canPrint = items.length > 0
 
-  // historial (cliente opcional)
   const recordSale = useCallback(() => {
     if (!userId) return
 
@@ -308,10 +292,6 @@ ${styles}
 
   const handlePrint = useCallback(() => {
     if (!canPrint) return
-
-    // ✅ mini haptic al imprimir (opcional)
-    haptic([20])
-
     recordSale()
     advanceAndReset()
 
@@ -320,14 +300,11 @@ ${styles}
       return
     }
     window.print()
-  }, [canPrint, recordSale, advanceAndReset, openIOSPrintWindow, haptic])
+  }, [canPrint, recordSale, advanceAndReset, openIOSPrintWindow])
 
   const handlePreviewPrint = useCallback(() => {
     if (!canPrint) return
-
     setShowPreview(false)
-    haptic([20])
-
     recordSale()
     advanceAndReset()
 
@@ -336,17 +313,17 @@ ${styles}
       return
     }
     window.print()
-  }, [canPrint, recordSale, advanceAndReset, openIOSPrintWindow, haptic])
+  }, [canPrint, recordSale, advanceAndReset, openIOSPrintWindow])
 
   const handleNewRemito = useCallback(() => {
     setClient(defaultClient)
     setItems([])
-    showToast("Nuevo remito listo ✅", true)
+    showToast("Nuevo remito listo ✅")
   }, [showToast])
 
   const handleClearItems = useCallback(() => {
     setItems([])
-    showToast("Productos vaciados", true)
+    showToast("Productos vaciados")
   }, [showToast])
 
   if (!mounted) {
@@ -365,26 +342,20 @@ ${styles}
   return (
     <>
       <div id="screen-ui" className="min-h-screen bg-background overflow-x-hidden">
-        {/* ✅ HEADER NUEVO (simple, mobile-first) */}
+        {/* HEADER liviano + acciones en desktop */}
         <header className="sticky top-0 z-40 border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
           <div className="mx-auto flex max-w-5xl items-center gap-3 px-4 py-3 lg:px-6">
-            {/* Izquierda: icono + fecha + nro */}
             <div className="flex items-center gap-3 min-w-0">
               <div className="flex size-9 items-center justify-center rounded-lg bg-primary shrink-0">
                 <FileText className="size-5 text-primary-foreground" />
               </div>
 
               <div className="min-w-0">
-                <div className="text-xs text-muted-foreground leading-none truncate">
-                  {remitoDateRef.current}
-                </div>
-                <div className="text-sm font-semibold text-foreground leading-tight truncate">
-                  N° {remitoNumero}
-                </div>
+                <div className="text-xs text-muted-foreground leading-none truncate">{remitoDateRef.current}</div>
+                <div className="text-sm font-semibold text-foreground leading-tight truncate">N° {remitoNumero}</div>
               </div>
             </div>
 
-            {/* Derecha: Lista + acciones */}
             <div className="ml-auto flex items-center gap-2">
               <select
                 className="h-9 rounded-lg border bg-background px-2 text-sm"
@@ -399,39 +370,38 @@ ${styles}
                 ))}
               </select>
 
-              <Button
-                variant="outline"
-                size="icon"
-                disabled={!canPrint}
-                onClick={() => setShowPreview(true)}
-                aria-label="Vista previa"
-                className="h-9 w-9"
-              >
-                <Eye className="size-4" />
-              </Button>
+              {/* ✅ Desktop actions */}
+              <div className="hidden sm:flex items-center gap-2">
+                <Button variant="outline" size="icon" onClick={handleNewRemito} aria-label="Nuevo remito" className="h-9 w-9">
+                  <RotateCcw className="size-4" />
+                </Button>
 
-              <Button size="sm" onClick={handlePrint} disabled={!canPrint} className="h-9 rounded-lg">
-                <Printer className="size-4" />
-                <span className="hidden sm:inline ml-2">Imprimir</span>
-              </Button>
-            </div>
-          </div>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  disabled={!canPrint}
+                  onClick={() => setShowPreview(true)}
+                  aria-label="Vista previa"
+                  className="h-9 w-9"
+                >
+                  <Eye className="size-4" />
+                </Button>
 
-          {/* Total: discreto */}
-          {items.length > 0 && (
-            <div className="mx-auto max-w-5xl px-4 pb-3 lg:px-6">
-              <div className="flex justify-end">
-                <span className="text-sm font-semibold text-primary">
-                  Total: {formatCurrency(total)}
-                </span>
+                <Button size="sm" onClick={handlePrint} disabled={!canPrint} className="h-9 rounded-lg">
+                  <Printer className="size-4" />
+                  <span className="ml-2">Imprimir</span>
+                </Button>
               </div>
             </div>
-          )}
+          </div>
         </header>
 
-        <main className="mx-auto max-w-5xl px-4 py-5 lg:px-6 pb-24 overflow-x-hidden">
+        {/* padding bottom grande: BottomNav + ActionBar + safe area */}
+        <main
+          className="mx-auto max-w-5xl px-4 py-5 lg:px-6 overflow-x-hidden"
+          style={{ paddingBottom: `calc(${BOTTOM_NAV_PX + ACTION_BAR_PX}px + env(safe-area-inset-bottom) + 16px)` }}
+        >
           <div className="flex flex-col gap-6">
-            {/* Productos primero */}
             <section className="rounded-xl bg-card border p-4 sm:p-5">
               <h2 className="text-base font-semibold text-foreground">Productos</h2>
               <p className="mt-1 text-xs text-muted-foreground">Buscá y agregá productos.</p>
@@ -440,50 +410,47 @@ ${styles}
               </div>
             </section>
 
-            {/* Cliente opcional (chico) */}
             <section className="rounded-xl bg-card border p-4 sm:p-5">
               <h2 className="text-sm font-semibold text-foreground">Cliente (opcional)</h2>
               <div className="mt-4">
                 <ClientForm data={client} onChange={setClient} />
               </div>
             </section>
-
-            {/* Acciones secundarias en desktop */}
-            <div className="hidden sm:flex justify-end gap-3 pb-8">
-              <Button variant="outline" size="lg" onClick={handleNewRemito}>
-                <RotateCcw className="size-4" />
-                Nuevo
-              </Button>
-              <Button variant="outline" size="lg" onClick={() => setShowPreview(true)} disabled={!canPrint}>
-                <Eye className="size-4" />
-                Vista previa
-              </Button>
-              <Button size="lg" onClick={handlePrint} disabled={!canPrint}>
-                <Printer className="size-4" />
-                Imprimir
-              </Button>
-            </div>
           </div>
         </main>
 
-        {/* Barra mobile inferior (acciones rápidas) */}
-        <div className="fixed inset-x-0 bottom-0 z-50 border-t bg-card/95 backdrop-blur sm:hidden">
-          <div className="px-2 py-2 pb-[calc(env(safe-area-inset-bottom)+0.4rem)] flex items-center justify-between gap-2">
+        {/* ✅ ACTION BAR fija MOBILE (con ruedita) */}
+        <div
+          className="fixed inset-x-0 z-50 border-t bg-card/95 backdrop-blur sm:hidden"
+          style={{ bottom: `calc(${BOTTOM_NAV_PX}px + env(safe-area-inset-bottom))` }}
+        >
+          <div className="px-3 py-2 flex items-center justify-between gap-2">
             <div className="min-w-0">
               <p className="text-[10px] text-muted-foreground leading-none">Total</p>
-              <p className="text-[14px] font-bold text-primary tabular-nums truncate max-w-[42vw] leading-tight">
+              <p className="text-[15px] font-bold text-primary tabular-nums truncate max-w-[42vw] leading-tight">
                 {formatCurrency(total)}
               </p>
+              <p className="text-[10px] text-muted-foreground">{items.length} items</p>
             </div>
 
-            <div className="flex gap-1 flex-shrink-0">
+            <div className="flex gap-2 flex-shrink-0">
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={handleNewRemito}
+                aria-label="Nuevo remito"
+                className="h-10 w-10"
+              >
+                <RotateCcw className="size-4" />
+              </Button>
+
               <Button
                 variant="outline"
                 size="icon"
                 disabled={items.length === 0}
                 onClick={handleClearItems}
                 aria-label="Vaciar"
-                className="h-9 w-9"
+                className="h-10 w-10"
               >
                 <Trash2 className="size-4" />
               </Button>
@@ -493,24 +460,24 @@ ${styles}
                 size="icon"
                 disabled={!canPrint}
                 onClick={() => setShowPreview(true)}
-                aria-label="Ver"
-                className="h-9 w-9"
+                aria-label="Vista previa"
+                className="h-10 w-10"
               >
                 <Eye className="size-4" />
               </Button>
 
-              <Button size="icon" disabled={!canPrint} onClick={handlePrint} aria-label="Imprimir" className="h-9 w-9">
+              <Button size="icon" disabled={!canPrint} onClick={handlePrint} aria-label="Imprimir" className="h-10 w-10">
                 <Printer className="size-4" />
               </Button>
             </div>
           </div>
         </div>
 
-        {/* ✅ Toast feedback */}
+        {/* ✅ Toast */}
         {toast.open && (
           <div
-            className="fixed left-1/2 z-[60] -translate-x-1/2"
-            style={{ bottom: `calc(72px + env(safe-area-inset-bottom) + 70px)` }}
+            className="fixed left-1/2 z-[60] -translate-x-1/2 sm:hidden"
+            style={{ bottom: `calc(${BOTTOM_NAV_PX + ACTION_BAR_PX}px + env(safe-area-inset-bottom) + 18px)` }}
           >
             <div className="flex items-center gap-2 rounded-full border bg-background px-4 py-2 shadow">
               <CheckCircle2 className="size-4 text-primary" />
